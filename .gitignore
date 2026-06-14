@@ -1,11 +1,7 @@
-# ==========================================
-# OPENDAV FLAGSHIP WORKSPACE GITIGNORE
-# ==========================================
 
-# Ignore everything in the workspace root by default to exclude diagnostic scripts & temporary dumps
 /*
 
-# Allow (Whitelist) only the actual Rust flagship project files and folders
+
 !/Cargo.toml
 !/Cargo.lock
 !/.gitignore
@@ -13,13 +9,13 @@
 !/assets/
 !/docs/
 !/opendav_desktop/
+!/bin/
 
-# Allow exports folder but keep local downloaded map caches out of Git
 !/exports/
 /exports/track_maps/
 /exports/StoParser_Source/
 
-# --- STANDARD COMPILER & MACHINE CACHES ---
+
 /target/
 **/target/
 **/*.rs.bk
@@ -30,10 +26,3 @@ __pycache__/
 Thumbs.db
 Thumbs.db:encryptable
 ehthumbs.db
-
-# --- EXCLUDE LARGE BINARIES & COMPILED ARCHIVES ---
-*.exe
-*.zip
-*.rar
-/Releases/
-/bin/
