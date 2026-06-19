@@ -1642,7 +1642,16 @@ impl eframe::App for OpenDavApp {
                                                     ui.horizontal(|ui| {
                                                         // 1. Cyan Reference Toggle Box (Left)
                                                         let active_cyan = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 136, 170) };
-                                                        let btn_c = ui.selectable_label(is_cyan, egui::RichText::new("C").color(if is_cyan { active_cyan } else { egui::Color32::DARK_GRAY }).strong());
+                                                        let border_color_c = if is_cyan { active_cyan } else { egui::Color32::TRANSPARENT };
+                                                        
+                                                        let btn_c = egui::Frame::none()
+                                                            .stroke(egui::Stroke::new(1.0, border_color_c))
+                                                            .rounding(4.0)
+                                                            .inner_margin(egui::Margin::symmetric(4, 2))
+                                                            .show(ui, |ui| {
+                                                                ui.selectable_label(false, egui::RichText::new("C").color(if is_cyan { active_cyan } else { egui::Color32::DARK_GRAY }).strong())
+                                                            }).inner;
+                                                        
                                                         if btn_c.clicked() {
                                                             if is_cyan {
                                                                 self.ref_lap_cyan = None;
@@ -1653,7 +1662,16 @@ impl eframe::App for OpenDavApp {
 
                                                         // 2. White Reference Toggle Box (Right)
                                                         let active_white = if is_dark { egui::Color32::WHITE } else { egui::Color32::from_rgb(40, 40, 40) };
-                                                        let btn_w = ui.selectable_label(is_white, egui::RichText::new("W").color(if is_white { active_white } else { egui::Color32::DARK_GRAY }).strong());
+                                                        let border_color_w = if is_white { active_white } else { egui::Color32::TRANSPARENT };
+                                                        
+                                                        let btn_w = egui::Frame::none()
+                                                            .stroke(egui::Stroke::new(1.0, border_color_w))
+                                                            .rounding(4.0)
+                                                            .inner_margin(egui::Margin::symmetric(4, 2))
+                                                            .show(ui, |ui| {
+                                                                ui.selectable_label(false, egui::RichText::new("W").color(if is_white { active_white } else { egui::Color32::DARK_GRAY }).strong())
+                                                            }).inner;
+                                                        
                                                         if btn_w.clicked() {
                                                             if is_white {
                                                                 self.ref_lap_white = None;
@@ -1668,7 +1686,17 @@ impl eframe::App for OpenDavApp {
                                                             text += " ★";
                                                         }
 
-                                                        if ui.selectable_label(is_selected, egui::RichText::new(text).color(label_color).strong()).clicked() {
+                                                        let border_color_l = if is_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
+                                                        
+                                                        let btn_l = egui::Frame::none()
+                                                            .stroke(egui::Stroke::new(1.0, border_color_l))
+                                                            .rounding(4.0)
+                                                            .inner_margin(egui::Margin::symmetric(6, 3))
+                                                            .show(ui, |ui| {
+                                                                ui.selectable_label(false, egui::RichText::new(text).color(label_color).strong())
+                                                            }).inner;
+
+                                                        if btn_l.clicked() {
                                                             self.selected_lap = Some(*lap_num);
                                                             
                                                             // MOTEC JUMP-SNAP JUMP bounds to focus perfectly on that lap's relative time window!
@@ -1873,14 +1901,23 @@ impl eframe::App for OpenDavApp {
                                                         if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
                                                     };
                                                     
-                                                    if ui.selectable_label(is_selected, egui::RichText::new(row_text).color(row_color).strong()).clicked() {
-                                                        self.selected_lap = Some(*lap_num);
-                                                        if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == *lap_num) {
-                                                            let (_, start_t, _end_t) = self.lap_ranges[pos];
-                                                            self.cursor_x = Some(start_t);
-                                                            self.reset_bounds_flag = true;
-                                                        }
-                                                    }
+                                                     let border_color = if is_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
+                                                     let btn_resp = egui::Frame::none()
+                                                         .stroke(egui::Stroke::new(1.0, border_color))
+                                                         .rounding(4.0)
+                                                         .inner_margin(egui::Margin::symmetric(6, 3))
+                                                         .show(ui, |ui| {
+                                                             ui.selectable_label(false, egui::RichText::new(row_text).color(row_color).strong())
+                                                         }).inner;
+
+                                                     if btn_resp.clicked() {
+                                                         self.selected_lap = Some(*lap_num);
+                                                         if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == *lap_num) {
+                                                             let (_, start_t, _end_t) = self.lap_ranges[pos];
+                                                             self.cursor_x = Some(start_t);
+                                                             self.reset_bounds_flag = true;
+                                                         }
+                                                     }
                                                     
                                                     col_count += 1;
                                                     if col_count >= cols {
