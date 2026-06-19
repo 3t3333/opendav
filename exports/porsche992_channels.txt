@@ -1,0 +1,286 @@
+Number of variables: 283
+Idx  | Channel Name             | Units            | Description
+------------------------------------------------------------------------------------------------------------------------
+000  | SessionTime              | s                | Seconds since session start
+001  | SessionTick              |                  | Current update number
+002  | SessionNum               |                  | Session number
+003  | SessionState             | irsdk_SessionState | Session state
+004  | SessionUniqueID          |                  | Session ID
+005  | SessionFlags             | irsdk_Flags      | Session flags
+006  | SessionTimeRemain        | s                | Seconds left till session ends
+007  | SessionLapsRemain        |                  | Old laps left till session ends use SessionLapsRemainEx
+008  | SessionLapsRemainEx      |                  | New improved laps left till session ends
+009  | SessionTimeTotal         | s                | Total number of seconds in session
+010  | SessionLapsTotal         |                  | Total number of laps in session
+011  | SessionJokerLapsRemain   |                  | Joker laps remaining to be taken
+012  | SessionOnJokerLap        |                  | Player is currently completing a joker lap
+013  | SessionTimeOfDay         | s                | Time of day in seconds
+014  | DriverMarker             |                  | Driver activated flag
+015  | PushToTalk               |                  | Push to talk button state
+016  | PushToPass               |                  | Push to pass button state
+017  | ManualBoost              |                  | Hybrid manual boost state
+018  | ManualNoBoost            |                  | Hybrid manual no boost state
+019  | IsOnTrack                |                  | 1=Car on track physics running with player in car
+020  | FrameRate                | fps              | Average frames per second
+021  | CpuUsageFG               | %                | Percent of available time fg thread took with a 1 sec avg
+022  | GpuUsage                 | %                | Percent of available time gpu took with a 1 sec avg
+023  | ChanAvgLatency           | s                | Communications average latency
+024  | ChanLatency              | s                | Communications latency
+025  | ChanQuality              | %                | Communications quality
+026  | ChanPartnerQuality       | %                | Partner communications quality
+027  | CpuUsageBG               | %                | Percent of available time bg thread took with a 1 sec avg
+028  | ChanClockSkew            | s                | Communications server clock skew
+029  | MemPageFaultSec          |                  | Memory page faults per second
+030  | MemSoftPageFaultSec      |                  | Memory soft page faults per second
+031  | PlayerCarPosition        |                  | Players position in race
+032  | PlayerCarClassPosition   |                  | Players class position in race
+033  | PlayerCarClass           |                  | Player car class id
+034  | PlayerTrackSurface       | irsdk_TrkLoc     | Players car track surface type
+035  | PlayerTrackSurfaceMaterial | irsdk_TrkSurf    | Players car track surface material type
+036  | PlayerCarIdx             |                  | Players carIdx
+037  | PlayerCarTeamIncidentCount |                  | Players team incident count for this session
+038  | PlayerCarMyIncidentCount |                  | Players own incident count for this session
+039  | PlayerCarDriverIncidentCount |                  | Teams current drivers incident count for this session
+040  | PlayerCarWeightPenalty   | kg               | Players weight penalty
+041  | PlayerCarPowerAdjust     | %                | Players power adjust
+042  | PlayerCarDryTireSetLimit |                  | Players dry tire set limit
+043  | PlayerCarTowTime         | s                | Players car is being towed if time is greater than zero
+044  | PlayerCarInPitStall      |                  | Players car is properly in their pitstall
+045  | PlayerCarPitSvStatus     | irsdk_PitSvStatus | Players car pit service status bits
+046  | PlayerTireCompound       |                  | Players car current tire compound
+047  | PlayerFastRepairsUsed    |                  | Players car number of fast repairs used
+048  | PaceMode                 | irsdk_PaceMode   | Are we pacing or not
+049  | OnPitRoad                |                  | Is the player car on pit road between the cones
+050  | SteeringWheelAngle       | rad              | Steering wheel angle
+051  | Throttle                 | %                | 0=off throttle to 1=full throttle
+052  | Brake                    | %                | 0=brake released to 1=max pedal force
+053  | Clutch                   | %                | 0=disengaged to 1=fully engaged
+054  | Gear                     |                  | -1=reverse  0=neutral  1..n=current gear
+055  | RPM                      | revs/min         | Engine rpm
+056  | Lap                      |                  | Laps started count
+057  | LapCompleted             |                  | Laps completed count
+058  | LapDist                  | m                | Meters traveled from S/F this lap
+059  | LapDistPct               | %                | Percentage distance around lap
+060  | CarDistAhead             | m                | Distance to first car in front of player in meters
+061  | CarDistBehind            | m                | Distance to first car behind player in meters
+062  | LapBestLap               |                  | Players best lap number
+063  | LapBestLapTime           | s                | Players best lap time
+064  | LapLastLapTime           | s                | Players last lap time
+065  | LapCurrentLapTime        | s                | Estimate of players current lap time as shown in F3 box
+066  | LapLasNLapSeq            |                  | Player num consecutive clean laps completed for N average
+067  | LapLastNLapTime          | s                | Player last N average lap time
+068  | LapBestNLapLap           |                  | Player last lap in best N average lap time
+069  | LapBestNLapTime          | s                | Player best N average lap time
+070  | LapDeltaToBestLap        | s                | Delta time for best lap
+071  | LapDeltaToBestLap_DD     | s/s              | Rate of change of delta time for best lap
+072  | LapDeltaToBestLap_OK     |                  | Delta time for best lap is valid
+073  | LapDeltaToOptimalLap     | s                | Delta time for optimal lap
+074  | LapDeltaToOptimalLap_DD  | s/s              | Rate of change of delta time for optimal lap
+075  | LapDeltaToOptimalLap_OK  |                  | Delta time for optimal lap is valid
+076  | LapDeltaToSessionBestLap | s                | Delta time for session best lap
+077  | LapDeltaToSessionBestLap_DD | s/s              | Rate of change of delta time for session best lap
+078  | LapDeltaToSessionBestLap_OK |                  | Delta time for session best lap is valid
+079  | LapDeltaToSessionOptimalLap | s                | Delta time for session optimal lap
+080  | LapDeltaToSessionOptimalLap_DD | s/s              | Rate of change of delta time for session optimal lap
+081  | LapDeltaToSessionOptimalLap_OK |                  | Delta time for session optimal lap is valid
+082  | LapDeltaToSessionLastlLap | s                | Delta time for session last lap
+083  | LapDeltaToSessionLastlLap_DD | s/s              | Rate of change of delta time for session last lap
+084  | LapDeltaToSessionLastlLap_OK |                  | Delta time for session last lap is valid
+085  | Speed                    | m/s              | GPS vehicle speed
+086  | Yaw                      | rad              | Yaw orientation
+087  | YawNorth                 | rad              | Yaw orientation relative to north
+088  | Pitch                    | rad              | Pitch orientation
+089  | Roll                     | rad              | Roll orientation
+090  | EnterExitReset           |                  | Indicate action the reset key will take 0 enter 1 exit 2 reset
+091  | Lat                      | deg              | Latitude in decimal degrees
+092  | Lon                      | deg              | Longitude in decimal degrees
+093  | Alt                      | m                | Altitude in meters
+094  | TrackTemp                | C                | Deprecated  set to TrackTempCrew
+095  | TrackTempCrew            | C                | Temperature of track measured by crew around track
+096  | AirTemp                  | C                | Temperature of air at start/finish line
+097  | TrackWetness             | irsdk_TrackWetness | How wet is the average track surface
+098  | Skies                    |                  | Skies (0=clear/1=p cloudy/2=m cloudy/3=overcast)
+099  | AirDensity               | kg/m^3           | Density of air at start/finish line
+100  | AirPressure              | Pa               | Pressure of air at start/finish line
+101  | WindVel                  | m/s              | Wind velocity at start/finish line
+102  | WindDir                  | rad              | Wind direction at start/finish line
+103  | RelativeHumidity         | %                | Relative Humidity at start/finish line
+104  | FogLevel                 | %                | Fog level at start/finish line
+105  | Precipitation            | %                | Precipitation at start/finish line
+106  | SolarAltitude            | rad              | Sun angle above horizon in radians
+107  | SolarAzimuth             | rad              | Sun angle clockwise from north in radians
+108  | WeatherDeclaredWet       |                  | The steward says rain tires can be used
+109  | PitsOpen                 |                  | True if pit stop is allowed for the current player
+110  | PlayerIncidents          | irsdk_IncidentFlags | Log incidents that the player recieved
+111  | PitRepairLeft            | s                | Time left for mandatory pit repairs if repairs are active
+112  | PitOptRepairLeft         | s                | Time left for optional repairs if repairs are active
+113  | PitstopActive            |                  | Is the player getting pit stop service
+114  | FastRepairUsed           |                  | How many fast repairs used so far
+115  | FastRepairAvailable      |                  | How many fast repairs left  255 is unlimited
+116  | LFTiresUsed              |                  | How many left front tires used so far
+117  | RFTiresUsed              |                  | How many right front tires used so far
+118  | LRTiresUsed              |                  | How many left rear tires used so far
+119  | RRTiresUsed              |                  | How many right rear tires used so far
+120  | LeftTireSetsUsed         |                  | How many left tire sets used so far
+121  | RightTireSetsUsed        |                  | How many right tire sets used so far
+122  | FrontTireSetsUsed        |                  | How many front tire sets used so far
+123  | RearTireSetsUsed         |                  | How many rear tire sets used so far
+124  | TireSetsUsed             |                  | How many tire sets used so far
+125  | LFTiresAvailable         |                  | How many left front tires are remaining  255 is unlimited
+126  | RFTiresAvailable         |                  | How many right front tires are remaining  255 is unlimited
+127  | LRTiresAvailable         |                  | How many left rear tires are remaining  255 is unlimited
+128  | RRTiresAvailable         |                  | How many right rear tires are remaining  255 is unlimited
+129  | LeftTireSetsAvailable    |                  | How many left tire sets are remaining  255 is unlimited
+130  | RightTireSetsAvailable   |                  | How many right tire sets are remaining  255 is unlimited
+131  | FrontTireSetsAvailable   |                  | How many front tire sets are remaining  255 is unlimited
+132  | RearTireSetsAvailable    |                  | How many rear tire sets are remaining  255 is unlimited
+133  | TireSetsAvailable        |                  | How many tire sets are remaining  255 is unlimited
+134  | IsOnTrackCar             |                  | 1=Car on track physics running
+135  | SteeringWheelAngleMax    | rad              | Steering wheel max angle
+136  | ShiftPowerPct            | %                | Friction torque applied to gears when shifting or grinding
+137  | ShiftGrindRPM            | RPM              | RPM of shifter grinding noise
+138  | ThrottleRaw              | %                | Raw throttle input 0=off throttle to 1=full throttle
+139  | BrakeRaw                 | %                | Raw brake input 0=brake released to 1=max pedal force
+140  | ClutchRaw                | %                | Raw clutch input 0=disengaged to 1=fully engaged
+141  | HandbrakeRaw             | %                | Raw handbrake input 0=handbrake released to 1=max force
+142  | BrakeABSactive           |                  | true if abs is currently reducing brake force pressure
+143  | BrakeABScutPct           | %                | Percent of brake force reduction caused by ABS system
+144  | Shifter                  |                  | Log inputs from the players shifter control
+145  | EngineWarnings           | irsdk_EngineWarnings | Bitfield for warning lights
+146  | FuelLevelPct             | %                | Percent fuel remaining
+147  | PitSvFlags               | irsdk_PitSvFlags | Bitfield of pit service checkboxes
+148  | PitSvLFP                 | kPa              | Pit service left front tire pressure
+149  | PitSvRFP                 | kPa              | Pit service right front tire pressure
+150  | PitSvLRP                 | kPa              | Pit service left rear tire pressure
+151  | PitSvRRP                 | kPa              | Pit service right rear tire pressure
+152  | PitSvFuel                | l or kWh         | Pit service fuel add amount
+153  | PitSvTireCompound        |                  | Pit service pending tire compound
+154  | P2P_Status               |                  | Push2Pass active or not on your car
+155  | P2P_Count                |                  | Push2Pass count of usage (or remaining in Race) on your car
+156  | SteeringWheelPctTorque   | %                | Force feedback % max torque on steering shaft unsigned
+157  | SteeringWheelPctTorqueSign | %                | Force feedback % max torque on steering shaft signed
+158  | SteeringWheelPctTorqueSignStops | %                | Force feedback % max torque on steering shaft signed stops
+159  | SteeringWheelPctIntensity | %                | Force feedback % max intensity
+160  | SteeringWheelPctSmoothing | %                | Force feedback % max smoothing
+161  | SteeringWheelPctDamper   | %                | Force feedback % max damping
+162  | SteeringWheelLimiter     | %                | Force feedback limiter strength limits impacts and oscillation
+163  | SteeringWheelMaxForceNm  | N*m              | Value of strength or max force slider in Nm for FFB
+164  | SteeringWheelUseLinear   |                  | True if steering wheel force is using linear mode
+165  | ShiftIndicatorPct        | %                | DEPRECATED use DriverCarSLBlinkRPM instead
+166  | TireLF_RumblePitch       | Hz               | Players LF Tire Sound rumblestrip pitch
+167  | TireRF_RumblePitch       | Hz               | Players RF Tire Sound rumblestrip pitch
+168  | TireLR_RumblePitch       | Hz               | Players LR Tire Sound rumblestrip pitch
+169  | TireRR_RumblePitch       | Hz               | Players RR Tire Sound rumblestrip pitch
+170  | SteeringWheelTorque_ST   | N*m              | Output torque on steering shaft at 360 Hz
+171  | SteeringWheelTorque      | N*m              | Output torque on steering shaft
+172  | VelocityZ                | m/s              | Z velocity
+173  | VelocityY                | m/s              | Y velocity
+174  | VelocityX                | m/s              | X velocity
+175  | YawRate                  | rad/s            | Yaw rate
+176  | PitchRate                | rad/s            | Pitch rate
+177  | RollRate                 | rad/s            | Roll rate
+178  | VertAccel                | m/s^2            | Vertical acceleration (including gravity)
+179  | LatAccel                 | m/s^2            | Lateral acceleration (including gravity)
+180  | LongAccel                | m/s^2            | Longitudinal acceleration (including gravity)
+181  | dcStarter                |                  | In car trigger car starter
+182  | dcToggleWindshieldWipers |                  | In car turn wipers on or off
+183  | dcTriggerWindshieldWipers |                  | In car momentarily turn on wipers
+184  | dcPitSpeedLimiterToggle  |                  | Track if pit speed limiter system is enabled
+185  | dcHeadlightFlash         |                  | In car headlight flash control active
+186  | dcLowFuelAccept          |                  | In car low fuel accept
+187  | dpRFTireChange           |                  | Pitstop rf tire change request
+188  | dpLFTireChange           |                  | Pitstop lf tire change request
+189  | dpRRTireChange           |                  | Pitstop rr tire change request
+190  | dpLRTireChange           |                  | Pitstop lr tire change request
+191  | dpFuelFill               |                  | Pitstop fuel fill flag
+192  | dpFuelAutoFillEnabled    |                  | Pitstop auto fill fuel system enabled
+193  | dpFuelAutoFillActive     |                  | Pitstop auto fill fuel next stop flag
+194  | dpWindshieldTearoff      |                  | Pitstop windshield tearoff
+195  | dpFuelAddKg              | kg               | Pitstop fuel add amount
+196  | dpFastRepair             |                  | Pitstop fast repair set
+197  | dcDashPage               |                  | In car dash display page adjustment
+198  | dcBrakeBias              |                  | In car brake bias adjustment
+199  | dpLFTireColdPress        | Pa               | Pitstop lf tire cold pressure adjustment
+200  | dpRFTireColdPress        | Pa               | Pitstop rf cold tire pressure adjustment
+201  | dpLRTireColdPress        | Pa               | Pitstop lr tire cold pressure adjustment
+202  | dpRRTireColdPress        | Pa               | Pitstop rr cold tire pressure adjustment
+203  | RFbrakeLinePress         | bar              | RF brake line pressure
+204  | RFspeed                  | m/s              | RF wheel speed
+205  | RFpressure               | kPa              | RF tire pressure
+206  | RFcoldPressure           | kPa              | RF tire cold pressure  as set in the garage
+207  | RFodometer               | m                | RF distance tire traveled since being placed on car
+208  | RFtempL                  | C                | RF tire left surface temperature
+209  | RFtempM                  | C                | RF tire middle surface temperature
+210  | RFtempR                  | C                | RF tire right surface temperature
+211  | RFtempCL                 | C                | RF tire left carcass temperature
+212  | RFtempCM                 | C                | RF tire middle carcass temperature
+213  | RFtempCR                 | C                | RF tire right carcass temperature
+214  | RFwearL                  | %                | RF tire left percent tread remaining
+215  | RFwearM                  | %                | RF tire middle percent tread remaining
+216  | RFwearR                  | %                | RF tire right percent tread remaining
+217  | LFbrakeLinePress         | bar              | LF brake line pressure
+218  | LFspeed                  | m/s              | LF wheel speed
+219  | LFpressure               | kPa              | LF tire pressure
+220  | LFcoldPressure           | kPa              | LF tire cold pressure  as set in the garage
+221  | LFodometer               | m                | LF distance tire traveled since being placed on car
+222  | LFtempL                  | C                | LF tire left surface temperature
+223  | LFtempM                  | C                | LF tire middle surface temperature
+224  | LFtempR                  | C                | LF tire right surface temperature
+225  | LFtempCL                 | C                | LF tire left carcass temperature
+226  | LFtempCM                 | C                | LF tire middle carcass temperature
+227  | LFtempCR                 | C                | LF tire right carcass temperature
+228  | LFwearL                  | %                | LF tire left percent tread remaining
+229  | LFwearM                  | %                | LF tire middle percent tread remaining
+230  | LFwearR                  | %                | LF tire right percent tread remaining
+231  | FuelUsePerHour           | kg/h             | Engine fuel used instantaneous
+232  | Voltage                  | V                | Engine voltage
+233  | WaterTemp                | C                | Engine coolant temp
+234  | WaterLevel               | l                | Engine coolant level
+235  | FuelPress                | bar              | Engine fuel pressure
+236  | OilTemp                  | C                | Engine oil temperature
+237  | OilPress                 | bar              | Engine oil pressure
+238  | OilLevel                 | l                | Engine oil level
+239  | ManifoldPress            | bar              | Engine manifold pressure
+240  | FuelLevel                | l                | Liters of fuel remaining
+241  | Engine0_RPM              | revs/min         | Engine0Engine rpm
+242  | RRbrakeLinePress         | bar              | RR brake line pressure
+243  | RRspeed                  | m/s              | RR wheel speed
+244  | RRpressure               | kPa              | RR tire pressure
+245  | RRcoldPressure           | kPa              | RR tire cold pressure  as set in the garage
+246  | RRodometer               | m                | RR distance tire traveled since being placed on car
+247  | RRtempL                  | C                | RR tire left surface temperature
+248  | RRtempM                  | C                | RR tire middle surface temperature
+249  | RRtempR                  | C                | RR tire right surface temperature
+250  | RRtempCL                 | C                | RR tire left carcass temperature
+251  | RRtempCM                 | C                | RR tire middle carcass temperature
+252  | RRtempCR                 | C                | RR tire right carcass temperature
+253  | RRwearL                  | %                | RR tire left percent tread remaining
+254  | RRwearM                  | %                | RR tire middle percent tread remaining
+255  | RRwearR                  | %                | RR tire right percent tread remaining
+256  | LRbrakeLinePress         | bar              | LR brake line pressure
+257  | LRspeed                  | m/s              | LR wheel speed
+258  | LRpressure               | kPa              | LR tire pressure
+259  | LRcoldPressure           | kPa              | LR tire cold pressure  as set in the garage
+260  | LRodometer               | m                | LR distance tire traveled since being placed on car
+261  | LRtempL                  | C                | LR tire left surface temperature
+262  | LRtempM                  | C                | LR tire middle surface temperature
+263  | LRtempR                  | C                | LR tire right surface temperature
+264  | LRtempCL                 | C                | LR tire left carcass temperature
+265  | LRtempCM                 | C                | LR tire middle carcass temperature
+266  | LRtempCR                 | C                | LR tire right carcass temperature
+267  | LRwearL                  | %                | LR tire left percent tread remaining
+268  | LRwearM                  | %                | LR tire middle percent tread remaining
+269  | LRwearR                  | %                | LR tire right percent tread remaining
+270  | LRshockDefl              | m                | LR shock deflection
+271  | LRshockVel               | m/s              | LR shock velocity
+272  | RRshockDefl              | m                | RR shock deflection
+273  | RRshockVel               | m/s              | RR shock velocity
+274  | LFshockDefl              | m                | LF shock deflection
+275  | LFshockVel               | m/s              | LF shock velocity
+276  | RFshockDefl              | m                | RF shock deflection
+277  | RFshockVel               | m/s              | RF shock velocity
+278  | LFrideHeight             | m                | LF ride height
+279  | RFrideHeight             | m                | RF ride height
+280  | LRrideHeight             | m                | LR ride height
+281  | RRrideHeight             | m                | RR ride height
+282  | CFSRrideHeight           | m                | Center front splitter ride height

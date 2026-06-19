@@ -18,6 +18,23 @@ const SPEED_COLOR: egui::Color32 = egui::Color32::from_rgb(78, 159, 245);      /
 enum ActivePage {
     OpenDav, // Summary Dashboard
     Graphs,  // MoTeC Workspace
+    Reports, // Sector/Corner Reports
+}
+
+#[derive(Clone, Debug)]
+pub struct TrackSector {
+    pub name: String,
+    pub start_dist: f64,
+    pub end_dist: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct LapData {
+    pub lap_num: i32,
+    pub dist: Vec<f64>,
+    pub time: Vec<f64>,
+    pub x: Vec<f64>,
+    pub y: Vec<f64>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -45,19 +62,20 @@ enum AppState {
 
 // --- GENERAL-PURPOSE MOTEC GRAPHING ARCHITECTURE ---
 // Encapsulates the entire multi-lane, 300+ FPS, highly-interactive plotting engine to guarantee 100% design integrity!
-pub struct ChartTrace {
+pub struct ChartTrace<'a> {
     pub name: &'static str,
-    pub scaled_pts: Vec<[f64; 2]>,
+    pub scaled_pts: &'a [[f64; 2]],
     pub color: egui::Color32,
     pub width: f32,
     pub raw_val: f64,
+    pub unit: &'static str,
 }
 
-pub struct ChartLane {
+pub struct ChartLane<'a> {
     pub title: &'static str,
-    pub traces: Vec<ChartTrace>,
     pub y_min: f64,
     pub y_max: f64,
+    pub traces: Vec<ChartTrace<'a>>,
 }
 
 pub struct OpenDavApp {
@@ -107,6 +125,17 @@ pub struct OpenDavApp {
     // --- MOTEC MULTI-LAP REFERENCE OVERLAY STATE ---
     ref_lap_white: Option<i32>,
     ref_lap_cyan: Option<i32>,
+
+    // Shared horizontal view bounds to perfectly synchronize Zoom/Pan/Scroll across different tabs!
+    visible_x_range: Option<(f64, f64)>,
+
+    // Tracks worksheet changes to execute tab-sync bounds on switch frames cleanly!
+    previous_worksheet: Option<WorksheetTab>,
+
+    // Sector reports caches
+    sectors: Vec<TrackSector>,
+    sector_bests: Vec<f64>,
+    lap_data_cache: Vec<LapData>,
 }
 
 impl Default for OpenDavApp {
@@ -138,8 +167,67 @@ impl Default for OpenDavApp {
             highlight_start: None,
             ref_lap_white: None,
             ref_lap_cyan: None,
+            visible_x_range: None,
+            previous_worksheet: None,
+            sectors: Vec::new(),
+            sector_bests: Vec::new(),
+            lap_data_cache: Vec::new(),
         }
     }
+}
+
+// Formats seconds into MM:SS.SSS
+fn format_lap_time(sec: f64) -> String {
+    let minutes = (sec / 60.0).floor() as i32;
+    let seconds = (sec % 60.0).floor() as i32;
+    let ms = ((sec % 1.0) * 1000.0).round() as i32;
+    format!("{:02}:{:02}.{:03}", minutes, seconds, ms)
+}
+
+// Spawns a background thread to download the track map SVG from the public iRacing static assets CDN
+fn trigger_track_map_download(track_id: i32) {
+    if track_id <= 0 { return; }
+    std::thread::spawn(move || {
+        let dest_dir = std::path::Path::new("exports/track_maps");
+        if !dest_dir.exists() {
+            let _ = std::fs::create_dir_all(dest_dir);
+        }
+        let dest_file = dest_dir.join(format!("{}.svg", track_id));
+
+        // Only download if the file does not already exist
+        if !dest_file.exists() {
+            println!("Downloading track map SVG for track_id: {} to: {}", track_id, dest_file.display());
+            
+            // Try official iRacing static CDN first (requires curl -f to fail on 404/403)
+            let official_url = format!("https://images-static.iracing.com/tracks/{}/track.svg", track_id);
+            let status = std::process::Command::new("curl")
+                .arg("-s")
+                .arg("-f")
+                .arg("-L")
+                .arg("-o")
+                .arg(&dest_file)
+                .arg(&official_url)
+                .status();
+
+            let success = match status {
+                Ok(s) => s.success(),
+                _ => false,
+            };
+
+            // If official CDN fails, automatically fallback to the community GitHub cdn mirror!
+            if !success {
+                let fallback_url = format!("https://cdn.jsdelivr.net/gh/iTelemetry/iracing-tracks/svgs/{}.svg", track_id);
+                let _ = std::process::Command::new("curl")
+                    .arg("-s")
+                    .arg("-f")
+                    .arg("-L")
+                    .arg("-o")
+                    .arg(&dest_file)
+                    .arg(&fallback_url)
+                    .status();
+            }
+        }
+    });
 }
 
 // Highly precise binary search bisector to locate closest index in < 1 microsecond!
@@ -160,6 +248,341 @@ fn get_closest_index(distance: &[f64], target_x: f64) -> usize {
                 }
             }
         }
+    }
+}
+
+// Slice only the cache points that correspond to a specific lap number (Standalone static helper!)
+fn get_lap_points_slice<'a>(lap_ranges: &[(i32, f64, f64)], cache: &'a [[f64; 2]], lap_num: i32) -> &'a [[f64; 2]] {
+    if let Some(pos) = lap_ranges.iter().position(|r| r.0 == lap_num) {
+        let (_, start_t, end_t) = lap_ranges[pos];
+        let start_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&start_t).unwrap_or(std::cmp::Ordering::Equal)) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        let end_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&end_t).unwrap_or(std::cmp::Ordering::Equal)) {
+            Ok(i) => i,
+            Err(i) => i,
+        }.min(cache.len());
+        &cache[start_idx..end_idx]
+    } else {
+        &[]
+    }
+}
+
+// Determine which lap the cursor is currently inside (Standalone static helper!)
+fn get_active_lap(lap_ranges: &[(i32, f64, f64)], cursor_x: Option<f64>, selected_lap: Option<i32>) -> i32 {
+    let cx = cursor_x.unwrap_or(0.0);
+    for &(lap_num, start_t, end_t) in lap_ranges {
+        if cx >= start_t && cx <= end_t {
+            return lap_num;
+        }
+    }
+    selected_lap.unwrap_or(1)
+}
+
+// Calculates the fastest lap by ignoring the first 3 laps if there are more than 3 laps in the session.
+fn get_fastest_lap(lap_times: &[(i32, f64)]) -> i32 {
+    let filtered: Vec<&(i32, f64)> = lap_times.iter()
+        .filter(|(lap_num, _)| *lap_num > 3)
+        .collect();
+    if !filtered.is_empty() {
+        filtered.iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|val| val.0)
+            .unwrap_or(0)
+    } else {
+        lap_times.iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|val| val.0)
+            .unwrap_or(0)
+    }
+}
+
+// Finds the exact time elapsed at a target distance on a lap by linear interpolation.
+fn get_lap_time_at_distance(lap_dist: &[f64], lap_time: &[f64], target_dist: f64) -> f64 {
+    if lap_dist.is_empty() {
+        return 0.0;
+    }
+    if target_dist <= lap_dist[0] {
+        return lap_time[0];
+    }
+    if target_dist >= lap_dist[lap_dist.len() - 1] {
+        return lap_time[lap_time.len() - 1];
+    }
+    match lap_dist.binary_search_by(|val| val.partial_cmp(&target_dist).unwrap_or(std::cmp::Ordering::Equal)) {
+        Ok(idx) => lap_time[idx],
+        Err(idx) => {
+            if idx == 0 {
+                lap_time[0]
+            } else if idx >= lap_dist.len() {
+                lap_time[lap_time.len() - 1]
+            } else {
+                let d0 = lap_dist[idx - 1];
+                let d1 = lap_dist[idx];
+                let t0 = lap_time[idx - 1];
+                let t1 = lap_time[idx];
+                t0 + (t1 - t0) * ((target_dist - d0) / (d1 - d0))
+            }
+        }
+    }
+}
+
+// Finds the coordinate (x, y) at a target distance on a lap by linear interpolation.
+fn get_lap_coord_at_distance(lap: &LapData, target_dist: f64) -> (f64, f64) {
+    if lap.dist.is_empty() {
+        return (0.0, 0.0);
+    }
+    if target_dist <= lap.dist[0] {
+        return (lap.x[0], lap.y[0]);
+    }
+    if target_dist >= lap.dist[lap.dist.len() - 1] {
+        return (lap.x[lap.x.len() - 1], lap.y[lap.y.len() - 1]);
+    }
+    match lap.dist.binary_search_by(|val| val.partial_cmp(&target_dist).unwrap_or(std::cmp::Ordering::Equal)) {
+        Ok(idx) => (lap.x[idx], lap.y[idx]),
+        Err(idx) => {
+            if idx == 0 {
+                (lap.x[0], lap.y[0])
+            } else if idx >= lap.dist.len() {
+                (lap.x[lap.x.len() - 1], lap.y[lap.y.len() - 1])
+            } else {
+                let d0 = lap.dist[idx - 1];
+                let d1 = lap.dist[idx];
+                let x0 = lap.x[idx - 1];
+                let x1 = lap.x[idx];
+                let y0 = lap.y[idx - 1];
+                let y1 = lap.y[idx];
+                let pct = (target_dist - d0) / (d1 - d0);
+                (x0 + (x1 - x0) * pct, y0 + (y1 - y0) * pct)
+            }
+        }
+    }
+}
+
+// Finds the coordinate (x, y) at a target relative time on a lap by linear interpolation.
+fn get_lap_coord_at_time(lap: &LapData, target_time: f64) -> (f64, f64) {
+    if lap.time.is_empty() {
+        return (0.0, 0.0);
+    }
+    if target_time <= lap.time[0] {
+        return (lap.x[0], lap.y[0]);
+    }
+    if target_time >= lap.time[lap.time.len() - 1] {
+        return (lap.x[lap.x.len() - 1], lap.y[lap.y.len() - 1]);
+    }
+    match lap.time.binary_search_by(|val| val.partial_cmp(&target_time).unwrap_or(std::cmp::Ordering::Equal)) {
+        Ok(idx) => (lap.x[idx], lap.y[idx]),
+        Err(idx) => {
+            if idx == 0 {
+                (lap.x[0], lap.y[0])
+            } else if idx >= lap.time.len() {
+                (lap.x[lap.x.len() - 1], lap.y[lap.y.len() - 1])
+            } else {
+                let t0 = lap.time[idx - 1];
+                let t1 = lap.time[idx];
+                let x0 = lap.x[idx - 1];
+                let x1 = lap.x[idx];
+                let y0 = lap.y[idx - 1];
+                let y1 = lap.y[idx];
+                let pct = (target_time - t0) / (t1 - t0);
+                (x0 + (x1 - x0) * pct, y0 + (y1 - y0) * pct)
+            }
+        }
+    }
+}
+
+// Splits a lap's coordinates into multiple continuous segments to prevent drawing straight lines across teleportations/resets
+fn get_lap_segments(lap: &LapData) -> Vec<PlotPoints<'_>> {
+    let mut segments = Vec::new();
+    let n = lap.x.len();
+    if n == 0 {
+        return segments;
+    }
+    
+    let max_jump = 50.0; // 50 meters jump threshold
+    let mut current_segment = Vec::new();
+    
+    current_segment.push([lap.x[0], lap.y[0]]);
+    
+    for i in 1..n {
+        let x0 = lap.x[i - 1];
+        let y0 = lap.y[i - 1];
+        let x1 = lap.x[i];
+        let y1 = lap.y[i];
+        
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let dist = (dx * dx + dy * dy).sqrt();
+        
+        if dist > max_jump {
+            if !current_segment.is_empty() {
+                segments.push(PlotPoints::from(current_segment));
+                current_segment = Vec::new();
+            }
+        }
+        current_segment.push([x1, y1]);
+    }
+    
+    if !current_segment.is_empty() {
+        segments.push(PlotPoints::from(current_segment));
+    }
+    
+    segments
+}
+
+// Automatically detects track corners and straights based on the fastest lap's lateral G-force and steering angle.
+fn detect_track_sectors(session: &ibt_parser::IbtSession) -> Vec<TrackSector> {
+    let mut sectors = Vec::new();
+    let fastest_lap = get_fastest_lap(&session.lap_times);
+    if fastest_lap <= 0 {
+        return sectors;
+    }
+    let df = &session.dataframe;
+    let lap_col = match df.column("Lap").ok().and_then(|c| c.f64().ok()) {
+        Some(col) => col,
+        None => return sectors,
+    };
+    let dist_col = match df.column("Distance_Derived").ok().and_then(|c| c.f64().ok()) {
+        Some(col) => col,
+        None => return sectors,
+    };
+    let lat_accel_col = match df.column("LatAccel").ok().and_then(|c| c.f64().ok()) {
+        Some(col) => col,
+        None => return sectors,
+    };
+    let steer_col = match df.column("SteeringWheelAngle").ok().and_then(|c| c.f64().ok()) {
+        Some(col) => col,
+        None => return sectors,
+    };
+    let mut lap_dist = Vec::new();
+    let mut lap_lat_accel = Vec::new();
+    let mut lap_steer = Vec::new();
+    let n = lap_col.len();
+    for i in 0..n {
+        if lap_col.get(i).unwrap_or(0.0) as i32 == fastest_lap {
+            lap_dist.push(dist_col.get(i).unwrap_or(0.0));
+            lap_lat_accel.push(lat_accel_col.get(i).unwrap_or(0.0));
+            lap_steer.push(steer_col.get(i).unwrap_or(0.0));
+        }
+    }
+    if lap_dist.is_empty() {
+        return sectors;
+    }
+    let start_dist = lap_dist[0];
+    let lap_len = lap_dist[lap_dist.len() - 1] - start_dist;
+    for d in &mut lap_dist {
+        *d -= start_dist;
+    }
+    let w_size = 20;
+    let smoothed_lat = ibt_parser::moving_average(&lap_lat_accel, w_size);
+    let smoothed_steer = ibt_parser::moving_average(&lap_steer, w_size);
+    let mut is_corner = vec![false; lap_dist.len()];
+    for i in 0..lap_dist.len() {
+        let abs_lat = smoothed_lat[i].abs();
+        let abs_steer = smoothed_steer[i].abs();
+        if abs_lat > 3.0 || abs_steer > 0.08 {
+            is_corner[i] = true;
+        }
+    }
+    let mut raw_corners = Vec::new();
+    let mut in_corner = false;
+    let mut start_idx = 0;
+    for i in 0..is_corner.len() {
+        if is_corner[i] {
+            if !in_corner {
+                in_corner = true;
+                start_idx = i;
+            }
+        } else {
+            if in_corner {
+                in_corner = false;
+                raw_corners.push((start_idx, i - 1));
+            }
+        }
+    }
+    if in_corner {
+        raw_corners.push((start_idx, is_corner.len() - 1));
+    }
+    let mut merged_corners = Vec::new();
+    if !raw_corners.is_empty() {
+        let mut curr = raw_corners[0];
+        for next in raw_corners.iter().skip(1) {
+            let gap_dist = lap_dist[next.0] - lap_dist[curr.1];
+            if gap_dist < 25.0 {
+                curr.1 = next.1;
+            } else {
+                merged_corners.push(curr);
+                curr = *next;
+            }
+        }
+        merged_corners.push(curr);
+    }
+    let mut final_corners = Vec::new();
+    for corner in merged_corners {
+        let length = lap_dist[corner.1] - lap_dist[corner.0];
+        if length >= 20.0 {
+            final_corners.push(corner);
+        }
+    }
+    if final_corners.is_empty() {
+        let s1 = lap_len / 3.0;
+        let s2 = 2.0 * lap_len / 3.0;
+        sectors.push(TrackSector { name: "Sector 1".to_string(), start_dist: 0.0, end_dist: s1 });
+        sectors.push(TrackSector { name: "Sector 2".to_string(), start_dist: s1, end_dist: s2 });
+        sectors.push(TrackSector { name: "Sector 3".to_string(), start_dist: s2, end_dist: lap_len });
+        return sectors;
+    }
+    let first_corner_start = lap_dist[final_corners[0].0];
+    if first_corner_start > 10.0 {
+        sectors.push(TrackSector {
+            name: "Str 0-1 (Start)".to_string(),
+            start_dist: 0.0,
+            end_dist: first_corner_start,
+        });
+    }
+    for i in 0..final_corners.len() {
+        let t_start = lap_dist[final_corners[i].0];
+        let t_end = lap_dist[final_corners[i].1];
+        let turn_num = i + 1;
+        sectors.push(TrackSector {
+            name: format!("Turn {}", turn_num),
+            start_dist: t_start,
+            end_dist: t_end,
+        });
+        if i + 1 < final_corners.len() {
+            let next_start = lap_dist[final_corners[i + 1].0];
+            sectors.push(TrackSector {
+                name: format!("Str {}-{}", turn_num, turn_num + 1),
+                start_dist: t_end,
+                end_dist: next_start,
+            });
+        }
+    }
+    let last_corner_end = lap_dist[final_corners[final_corners.len() - 1].1];
+    if lap_len - last_corner_end > 10.0 {
+        sectors.push(TrackSector {
+            name: "Str 0-1 (End)".to_string(),
+            start_dist: last_corner_end,
+            end_dist: lap_len,
+        });
+    }
+    sectors
+}
+
+// Formats sector split duration in seconds into SS.SSS or MM:SS.SSS
+fn format_sector_time(sec: f64) -> String {
+    if sec <= 0.0 || sec == f64::MAX {
+        return "-".to_string();
+    }
+    if sec >= 60.0 {
+        let minutes = (sec / 60.0).floor() as i32;
+        let seconds = (sec % 60.0).floor() as i32;
+        let ms = ((sec % 1.0) * 1000.0).round() as i32;
+        format!("{:02}:{:02}.{:03}", minutes, seconds, ms)
+    } else {
+        let seconds = sec.floor() as i32;
+        let ms = ((sec % 1.0) * 1000.0).round() as i32;
+        format!("{:02}.{:03}", seconds, ms)
     }
 }
 
@@ -190,7 +613,7 @@ impl OpenDavApp {
     // Precomputes and caches ALL points of the entire session plotted along relative SessionTime (seconds)
     // Pre-scales and normalizes Y-axis values once on load to ensure absolute ZERO heap allocations in drawing hot-loop!
     fn rebuild_points_cache(&mut self) {
-        if let Some(session) = &self.session {
+        if let Some(session) = &mut self.session {
             let n = session.distance.len();
             
             // Build base points
@@ -215,8 +638,18 @@ impl OpenDavApp {
             let rpm_col = session.dataframe.column("RPM").ok().map(|c| c.f64().ok()).flatten();
             let gear_col = session.dataframe.column("Gear").ok().map(|c| c.f64().ok()).flatten();
 
+            let is_on_track_col = session.dataframe.column("IsOnTrack").ok().map(|c| c.f64().ok()).flatten();
+            let in_pit_stall_col = session.dataframe.column("PlayerCarInPitStall").ok().map(|c| c.f64().ok()).flatten();
+
             // 1. Compile entire session relative seconds [0.0 to stint duration]
             for i in 0..n {
+                let is_on_track = is_on_track_col.as_ref().map(|c| c.get(i).unwrap_or(1.0)).unwrap_or(1.0);
+                let in_pit_stall = in_pit_stall_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
+
+                if is_on_track < 1.0 || in_pit_stall > 0.0 {
+                    continue; // Skip off-track or pit stall samples cleanly!
+                }
+
                 let s_time = time_col.get(i).unwrap_or(0.0);
                 let rel_time = s_time - session_start;
                 
@@ -224,22 +657,22 @@ impl OpenDavApp {
                 rear.push([rel_time, session.rear_smooth[i]]);
                 rake.push([rel_time, session.rake[i]]);
                 
-                let raw_speed = speed_col.map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 3.6; // convert m/s to km/h
+                let raw_speed = speed_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 3.6; // convert m/s to km/h
                 speed.push([rel_time, raw_speed]);
 
-                let raw_thr = throttle_col.map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0; // convert 0..1 to 0..100%
+                let raw_thr = throttle_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0; // convert 0..1 to 0..100%
                 throttle.push([rel_time, raw_thr]);
 
-                let raw_brk = brake_col.map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0; // convert 0..1 to 0..100%
+                let raw_brk = brake_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0; // convert 0..1 to 0..100%
                 brake.push([rel_time, raw_brk]);
 
-                let raw_steer = steering_col.map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 57.2958; // convert rad to deg
+                let raw_steer = steering_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 57.2958; // convert rad to deg
                 steering.push([rel_time, raw_steer]);
 
-                let raw_rpm = rpm_col.map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
+                let raw_rpm = rpm_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
                 rpm.push([rel_time, raw_rpm]);
 
-                let raw_gear = gear_col.map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
+                let raw_gear = gear_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
                 gear.push([rel_time, raw_gear]);
             }
 
@@ -311,7 +744,8 @@ impl OpenDavApp {
             };
 
             // Scale and store normalized curves directly in place inside cache!
-            for i in 0..n {
+            let cached_len = front.len();
+            for i in 0..cached_len {
                 front[i][1] = scale_rh(front[i][1]);
                 rear[i][1] = scale_rh(rear[i][1]);
                 rake[i][1] = scale_rake(rake[i][1]);
@@ -334,124 +768,646 @@ impl OpenDavApp {
             self.rpm_pts_cache = rpm;
             self.gear_pts_cache = gear;
 
-            // 3. Precompute Lap Start/End Boundaries and dotted line dividers!
+            // 3. Precompute Lap Start/End Boundaries based on actual parsed lap numbers
             let mut markers = Vec::new();
-            let mut ranges: Vec<(i32, f64, f64)> = Vec::new();
-            let mut seen_laps = std::collections::HashSet::new();
+            let mut ranges = Vec::new();
 
-            for i in 0..n {
-                let lap_num = session.laps[i];
-                let s_time = time_col.get(i).unwrap_or(0.0);
-                let rel_time = s_time - session_start;
+            let df = &session.dataframe;
+            let lap_col = df.column("Lap").unwrap().f64().unwrap();
+            let time_col = df.column("SessionTime").unwrap().f64().unwrap();
+            let session_start = time_col.get(0).unwrap_or(0.0);
 
-                if seen_laps.insert(lap_num) {
-                    markers.push(rel_time);
-                    
-                    // Close previous lap range
-                    if !ranges.is_empty() {
-                        let len = ranges.len();
-                        ranges[len - 1].2 = rel_time;
+            for &(lap_num, _duration) in &session.lap_times {
+                let mut start_idx = None;
+                let mut end_idx = None;
+                for i in 0..n {
+                    if lap_col.get(i).unwrap_or(0.0) as i32 == lap_num {
+                        if start_idx.is_none() {
+                            start_idx = Some(i);
+                        }
+                        end_idx = Some(i);
                     }
-                    ranges.push((lap_num, rel_time, rel_time + 120.0)); // Standby default duration
+                }
+                if let (Some(s_idx), Some(e_idx)) = (start_idx, end_idx) {
+                    let start_t = time_col.get(s_idx).unwrap_or(0.0) - session_start;
+                    let end_t = time_col.get(e_idx).unwrap_or(0.0) - session_start;
+                    ranges.push((lap_num, start_t, end_t));
+                    markers.push(start_t);
                 }
             }
 
-            // Close the final lap range with stint end duration
-            if !ranges.is_empty() && !self.front_pts_cache.is_empty() {
-                let stint_end = self.front_pts_cache[self.front_pts_cache.len() - 1][0];
-                let len = ranges.len();
-                ranges[len - 1].2 = stint_end;
+            if ranges.is_empty() && !self.front_pts_cache.is_empty() {
+                let end_stint = self.front_pts_cache.last().unwrap()[0];
+                ranges.push((1, 0.0, end_stint));
+                markers.push(0.0);
             }
 
-            self.lap_markers = markers;
+            self.lap_markers = markers.clone();
             self.lap_ranges = ranges;
 
-            // Default locked cursor to absolute stint start on load
+            // Harmonize and write the physical transition lap list back to the session struct to maintain absolute app coherence!
+            let mut sync_laps = Vec::new();
+            for &(lap_num, start_t, end_t) in &self.lap_ranges {
+                let duration = end_t - start_t;
+                if duration > 1.0 {
+                    sync_laps.push((lap_num, duration));
+                }
+            }
+            session.lap_times = sync_laps;
+
+            // Default locked cursor to the fastest lap start on load!
             if !self.front_pts_cache.is_empty() {
-                self.cursor_x = Some(0.0);
+                let max_time = self.front_pts_cache.last().unwrap()[0];
+                if let Some(sel_lap) = self.selected_lap {
+                    if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == sel_lap) {
+                        let (_, start_t, end_t) = self.lap_ranges[pos];
+                        self.cursor_x = Some(start_t);
+                        self.visible_x_range = Some((start_t, end_t));
+                    } else {
+                        self.cursor_x = Some(0.0);
+                        self.visible_x_range = Some((0.0, max_time));
+                    }
+                } else {
+                    self.cursor_x = Some(0.0);
+                    self.visible_x_range = Some((0.0, max_time));
+                }
                 self.reset_bounds_flag = true;
             }
+
+            // Rebuild lap data cache
+            let mut data_cache = Vec::new();
+            let mut unique_laps = Vec::new();
+            for &(lap_num, _, _) in &self.lap_ranges {
+                unique_laps.push(lap_num);
+            }
+
+            let df = &session.dataframe;
+            let lap_col = df.column("Lap").unwrap().f64().unwrap();
+            let dist_col = df.column("Distance_Derived").unwrap().f64().unwrap();
+            let time_col = df.column("SessionTime").unwrap().f64().unwrap();
+            let lat_col = df.column("Lat").ok().and_then(|c| c.f64().ok());
+            let lon_col = df.column("Lon").ok().and_then(|c| c.f64().ok());
+
+            let mut lat0 = 0.0;
+            let mut lon0 = 0.0;
+            if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
+                lat0 = la.get(0).unwrap_or(0.0);
+                lon0 = lo.get(0).unwrap_or(0.0);
+            }
+
+            let r_earth = 6378137.0; // Earth radius in meters
+            let lat0_rad = lat0 * std::f64::consts::PI / 180.0;
+            let lon0_rad = lon0 * std::f64::consts::PI / 180.0;
+
+            for &l_num in &unique_laps {
+                let mut dists = Vec::new();
+                let mut times = Vec::new();
+                let mut xs = Vec::new();
+                let mut ys = Vec::new();
+                for i in 0..n {
+                    if lap_col.get(i).unwrap_or(0.0) as i32 == l_num {
+                        dists.push(dist_col.get(i).unwrap_or(0.0));
+                        times.push(time_col.get(i).unwrap_or(0.0));
+                        
+                        let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+                        let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+                        
+                        let lat_rad = lat * std::f64::consts::PI / 180.0;
+                        let lon_rad = lon * std::f64::consts::PI / 180.0;
+                        
+                        let x = r_earth * (lon_rad - lon0_rad) * lat0_rad.cos();
+                        let y = r_earth * (lat_rad - lat0_rad);
+                        xs.push(x);
+                        ys.push(y);
+                    }
+                }
+                if !dists.is_empty() {
+                    let base_dist = dists[0];
+                    let base_time = times[0];
+                    for d in &mut dists { *d -= base_dist; }
+                    for t in &mut times { *t -= base_time; }
+                    data_cache.push(LapData {
+                        lap_num: l_num,
+                        dist: dists,
+                        time: times,
+                        x: xs,
+                        y: ys,
+                    });
+                }
+            }
+            self.lap_data_cache = data_cache;
+
+            // Rebuild track sectors and sector bests cache
+            self.sectors = detect_track_sectors(session);
+            
+            let mut bests = vec![f64::MAX; self.sectors.len()];
+            for (s_idx, sector) in self.sectors.iter().enumerate() {
+                for lap in &self.lap_data_cache {
+                    if lap.lap_num > 3 {
+                        let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
+                        let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
+                        let s_time = t_end - t_start;
+                        if s_time > 0.0 && s_time < bests[s_idx] {
+                            bests[s_idx] = s_time;
+                        }
+                    }
+                }
+                if bests[s_idx] == f64::MAX {
+                    for lap in &self.lap_data_cache {
+                        let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
+                        let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
+                        let s_time = t_end - t_start;
+                        if s_time > 0.0 && s_time < bests[s_idx] {
+                            bests[s_idx] = s_time;
+                        }
+                    }
+                }
+            }
+            self.sector_bests = bests;
         }
     }
+}
 
-    // Slice only the cache points that correspond to a specific lap number
-    fn get_lap_points_slice<'a>(&self, cache: &'a [[f64; 2]], lap_num: i32) -> &'a [[f64; 2]] {
-        if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == lap_num) {
-            let (_, start_t, end_t) = self.lap_ranges[pos];
-            let start_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&start_t).unwrap_or(std::cmp::Ordering::Equal)) {
-                Ok(i) => i,
-                Err(i) => i,
-            };
-            let end_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&end_t).unwrap_or(std::cmp::Ordering::Equal)) {
-                Ok(i) => i,
-                Err(i) => i,
-            }.min(cache.len());
-            &cache[start_idx..end_idx]
-        } else {
-            &[]
+// --- REUSABLE MOTEC WORKSPACE PLOTTER ENGINE ---
+// Zero-allocation, multi-lane, double-click zoom capable plot drawer!
+// Ensures 100% consistent interactions across ALL current and future tabs!
+impl OpenDavApp {
+    fn draw_motec_plot(&mut self, ui: &mut egui::Ui, plot_id: &str, worksheet: WorksheetTab, is_tab_switch: bool) {
+        if self.front_pts_cache.is_empty() { return; }
+        
+        let max_time = self.front_pts_cache.last().unwrap()[0];
+        let is_dark = ui.style().visuals.dark_mode;
+
+        // 1. EXTRACT RAW HUD METRICS AT PLAYBACK CURSOR INDEX (EXCLUSIVE ZERO-CONFLICT SCOPE!)
+        let mut raw_val_speed = 0.0;
+        let mut raw_val_throttle = 0.0;
+        let mut raw_val_brake = 0.0;
+        let mut raw_val_steering = 0.0;
+        let mut raw_val_rpm = 0.0;
+        let mut raw_val_gear = 0.0;
+        let mut raw_val_front = 0.0;
+        let mut raw_val_rear = 0.0;
+        let mut raw_val_rake = 0.0;
+
+        if let Some(cx) = self.cursor_x {
+            let idx = get_closest_index(&self.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
+            if let Some(session) = &self.session {
+                let speed_col = session.dataframe.column("Speed").ok().map(|c| c.f64().ok()).flatten();
+                let throttle_col = session.dataframe.column("Throttle").ok().map(|c| c.f64().ok()).flatten();
+                let brake_col = session.dataframe.column("Brake").ok().map(|c| c.f64().ok()).flatten();
+                let steering_col = session.dataframe.column("SteeringWheelAngle").ok().map(|c| c.f64().ok()).flatten();
+                let rpm_col = session.dataframe.column("RPM").ok().map(|c| c.f64().ok()).flatten();
+                let gear_col = session.dataframe.column("Gear").ok().map(|c| c.f64().ok()).flatten();
+
+                raw_val_speed = speed_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 3.6;
+                raw_val_throttle = throttle_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
+                raw_val_brake = brake_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
+                raw_val_steering = steering_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 57.2958;
+                raw_val_rpm = rpm_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0);
+                raw_val_gear = gear_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0);
+
+                if idx < session.front_smooth.len() {
+                    let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
+                    raw_val_front = session.front_smooth[idx] * scale;
+                    raw_val_rear = session.rear_smooth[idx] * scale;
+                    raw_val_rake = session.rake[idx] * scale;
+                }
+            }
         }
+
+        // 2. CONSTRUCT LANES ACCORDING TO WORKSHEET TYPE
+        let lanes = match worksheet {
+            WorksheetTab::Basic => vec![
+                ChartLane {
+                    title: "Ground Speed",
+                    y_min: 76.0,
+                    y_max: 98.0,
+                    traces: vec![
+                        ChartTrace { name: "Speed", scaled_pts: &self.speed_pts_cache, color: SPEED_COLOR, width: 2.2, raw_val: raw_val_speed, unit: " km/h" },
+                    ],
+                },
+                ChartLane {
+                    title: "Engine RPM",
+                    y_min: 52.0,
+                    y_max: 72.0,
+                    traces: vec![
+                        ChartTrace { name: "RPM", scaled_pts: &self.rpm_pts_cache, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, raw_val: raw_val_rpm, unit: "" },
+                    ],
+                },
+                ChartLane {
+                    title: "Pedal Inputs",
+                    y_min: 28.0,
+                    y_max: 48.0,
+                    traces: vec![
+                        ChartTrace { name: "Throttle", scaled_pts: &self.throttle_pts_cache, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, raw_val: raw_val_throttle, unit: "%" },
+                        ChartTrace { name: "Brake", scaled_pts: &self.brake_pts_cache, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, raw_val: raw_val_brake, unit: "%" },
+                    ],
+                },
+                ChartLane {
+                    title: "Steering",
+                    y_min: 10.0,
+                    y_max: 24.0,
+                    traces: vec![
+                        ChartTrace { name: "Steering Angle", scaled_pts: &self.steering_pts_cache, color: SUB_ACCENT_COLOR, width: 2.2, raw_val: raw_val_steering, unit: "°" },
+                    ],
+                },
+            ],
+            WorksheetTab::DynamicRake => vec![
+                ChartLane {
+                    title: "Ground Speed",
+                    y_min: 70.0,
+                    y_max: 98.0,
+                    traces: vec![
+                        ChartTrace { name: "Speed", scaled_pts: &self.speed_pts_cache, color: SPEED_COLOR, width: 2.2, raw_val: raw_val_speed, unit: " km/h" },
+                    ],
+                },
+                ChartLane {
+                    title: "Axle Heights",
+                    y_min: 40.0,
+                    y_max: 66.0,
+                    traces: vec![
+                        ChartTrace { name: "Front RH", scaled_pts: &self.front_pts_cache, color: SUB_ACCENT_COLOR, width: 2.2, raw_val: raw_val_front, unit: "mm" },
+                        ChartTrace { name: "Rear RH", scaled_pts: &self.rear_pts_cache, color: egui::Color32::from_rgb(255, 20, 147), width: 2.2, raw_val: raw_val_rear, unit: "mm" },
+                    ],
+                },
+                ChartLane {
+                    title: "Chassis Attitude",
+                    y_min: 12.0,
+                    y_max: 36.0,
+                    traces: vec![
+                        ChartTrace { name: "Dynamic Rake", scaled_pts: &self.rake_pts_cache, color: ACCENT_COLOR, width: 2.2, raw_val: raw_val_rake, unit: "mm" },
+                    ],
+                },
+            ],
+            _ => vec![],
+        };
+
+        // 3. RENDER MASTER DYNAMIC HUD HEADERS ROW
+        ui.horizontal(|ui| {
+            if let Some(cx) = self.cursor_x {
+                ui.colored_label(ACCENT_COLOR, format!("⏱  PLAYBACK @ {}", format_lap_time(cx)));
+                
+                // Iteratively render each trace metrics matching their unique channel colors!
+                for lane in &lanes {
+                    for trace in &lane.traces {
+                        ui.separator();
+                        ui.colored_label(trace.color, format!("{}: {:.1}{}", trace.name, trace.raw_val, trace.unit));
+                    }
+                }
+            }
+        });
+        ui.add_space(4.0);
+
+        // 4. INITIALIZE UNIFIED PLOT CANVAS
+        let mut plot_height = ui.available_height() - 10.0;
+        if plot_height < 300.0 { plot_height = 300.0; }
+
+        let mut plot = Plot::new(plot_id)
+            .height(plot_height)
+            .allow_zoom([false, false])
+            .allow_scroll([false, false])
+            .allow_drag([false, false])
+            .allow_boxed_zoom(false)
+            .allow_double_click_reset(false)
+            .auto_bounds([false, false])
+            .include_y(0.0)
+            .include_y(100.0)
+            .allow_axis_zoom_drag([false, false]);
+
+        plot = plot.x_axis_formatter(|tick, _range| {
+            let sec = tick.value;
+            let minutes = (sec / 60.0).floor() as i32;
+            let seconds = (sec % 60.0).floor() as i32;
+            let ms = ((sec % 1.0) * 10.0).round() as i32;
+            format!("{:02}:{:02}.{}", minutes, seconds, ms)
+        });
+
+        plot = plot.show_axes([true, false]);
+
+        // Extract local copies of mutable states to completely bypass Rust borrow-checker conflicts!
+        let mut cursor_x = self.cursor_x;
+        let mut visible_x_range = self.visible_x_range;
+        let mut reset_bounds_flag = self.reset_bounds_flag;
+        let mut is_dragging_ticker = self.is_dragging_ticker;
+        let mut is_highlight_active = self.is_highlight_active;
+        let mut highlight_start = self.highlight_start;
+        
+        let selected_lap = self.selected_lap;
+        let lap_ranges = &self.lap_ranges;
+        let ref_lap_cyan = self.ref_lap_cyan;
+        let ref_lap_white = self.ref_lap_white;
+        let lap_markers = &self.lap_markers;
+
+        plot.show(ui, |plot_ui| {
+            let is_left_click_down = plot_ui.ctx().input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+
+            // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
+            if plot_ui.response().double_clicked() {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    let d_click_x = pointer_pos.x.clamp(0.0, max_time);
+                    highlight_start = Some(d_click_x);
+                    cursor_x = Some(d_click_x);
+                    is_highlight_active = true;
+                }
+            }
+
+            // A. HANDLE VIEWPORT SYNC & LAP FOCUSING
+            if reset_bounds_flag || is_tab_switch {
+                if let Some(sel_lap) = selected_lap {
+                    if let Some(pos) = lap_ranges.iter().position(|r| r.0 == sel_lap) {
+                        let (_, start_t, end_t) = lap_ranges[pos];
+                        let end_time_focus = end_t; // EXACT PRECOMPUTED END TIME OF CURRENT LAP!
+                        if is_tab_switch && visible_x_range.is_some() {
+                            let (min_x, max_x) = visible_x_range.unwrap();
+                            plot_ui.set_plot_bounds_x(min_x..=max_x);
+                        } else {
+                            plot_ui.set_plot_bounds_x(start_t..=end_time_focus);
+                            visible_x_range = Some((start_t, end_time_focus));
+                        }
+                    } else {
+                        if is_tab_switch && visible_x_range.is_some() {
+                            let (min_x, max_x) = visible_x_range.unwrap();
+                            plot_ui.set_plot_bounds_x(min_x..=max_x);
+                        } else {
+                            plot_ui.set_plot_bounds_x(0.0..=max_time);
+                            visible_x_range = Some((0.0, max_time));
+                        }
+                    }
+                } else {
+                    if is_tab_switch && visible_x_range.is_some() {
+                        let (min_x, max_x) = visible_x_range.unwrap();
+                        plot_ui.set_plot_bounds_x(min_x..=max_x);
+                    } else {
+                        plot_ui.set_plot_bounds_x(0.0..=max_time);
+                        visible_x_range = Some((0.0, max_time));
+                    }
+                }
+                reset_bounds_flag = false;
+            }
+
+            // B. READ ACTIVE VIEWPORT COORDS
+            let active_bounds = plot_ui.plot_bounds();
+            let min_visible_x = active_bounds.min()[0];
+            let max_visible_x = active_bounds.max()[0];
+            let visible_width = max_visible_x - min_visible_x;
+
+            // Commit viewport sync metrics back to local copy state
+            visible_x_range = Some((min_visible_x, max_visible_x));
+
+            // High-performance decimator closures
+            let decimate_points = |pts: &[[f64; 2]]| -> PlotPoints {
+                if pts.is_empty() { return PlotPoints::default(); }
+                let start_idx = match pts.binary_search_by(|p| p[0].partial_cmp(&min_visible_x).unwrap_or(std::cmp::Ordering::Equal)) {
+                    Ok(idx) => idx,
+                    Err(idx) => idx,
+                }.saturating_sub(1);
+                let end_idx = match pts.binary_search_by(|p| p[0].partial_cmp(&max_visible_x).unwrap_or(std::cmp::Ordering::Equal)) {
+                    Ok(idx) => idx,
+                    Err(idx) => idx,
+                }.min(pts.len());
+                let slice = &pts[start_idx..end_idx];
+                let m = slice.len();
+                if m <= 2000 {
+                    slice.to_vec().into()
+                } else {
+                    let stride = m / 2000;
+                    let mut downsampled = Vec::with_capacity(2002);
+                    downsampled.push(slice[0]);
+                    let mut idx = 1;
+                    while idx < m - 1 {
+                        downsampled.push(slice[idx]);
+                        idx += stride;
+                    }
+                    downsampled.push(slice[m - 1]);
+                    downsampled.into()
+                }
+            };
+
+            // C. DRAW AXIS DIVIDER LANES DYNAMICALLY
+            let div_color = if is_dark { egui::Color32::from_rgb(25, 30, 32) } else { egui::Color32::from_rgb(205, 204, 203) };
+            plot_ui.hline(HLine::new("Bottom Ticker Divider", 9.5).color(div_color).width(1.0));
+            for lane in &lanes {
+                plot_ui.hline(HLine::new(format!("Divider_{}", lane.title), lane.y_min - 2.0).color(div_color).width(1.0));
+            }
+
+            // D. DRAW TICKER TIMELINE TRACK
+            let track_color = if is_dark { egui::Color32::from_rgb(12, 18, 20) } else { egui::Color32::from_rgb(215, 214, 213) };
+            plot_ui.hline(HLine::new("Timeline Track", 4.75).color(track_color).width(9.5));
+
+            // E. DRAW MAIN LANES AND COMPILING TRACES
+            for lane in &lanes {
+                for trace in &lane.traces {
+                    let dec_pts = decimate_points(trace.scaled_pts);
+                    plot_ui.line(Line::new(trace.name, dec_pts).color(trace.color).width(trace.width));
+                }
+            }
+
+            // F. DRAW DYNAMIC MOTEC MULTI-LAP REFERENCE OVERLAYS
+            // Cyan reference overlays
+            if let Some(ref_lap_num) = ref_lap_cyan {
+                if let Some(pos) = lap_ranges.iter().position(|r| r.0 == ref_lap_num) {
+                    let ref_start = lap_ranges[pos].1;
+                    
+                    for &(lap_num, start_t, end_t) in lap_ranges {
+                        if end_t >= min_visible_x && start_t <= max_visible_x {
+                            let offset = start_t - ref_start;
+                            
+                            for lane in &lanes {
+                                for trace in &lane.traces {
+                                    let ref_slice = get_lap_points_slice(lap_ranges, trace.scaled_pts, ref_lap_num);
+                                    if !ref_slice.is_empty() {
+                                        let shifted: Vec<[f64; 2]> = ref_slice.iter().map(|p| [p[0] + offset, p[1]]).collect();
+                                        let dec_ref = decimate_points(&shifted);
+                                        let cyan_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 136, 170) };
+                                        plot_ui.line(Line::new(format!("CyanRef_{}_{}", trace.name, lap_num), dec_ref).color(cyan_color).width(1.2));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // White reference overlays
+            if let Some(ref_lap_num) = ref_lap_white {
+                if let Some(pos) = lap_ranges.iter().position(|r| r.0 == ref_lap_num) {
+                    let ref_start = lap_ranges[pos].1;
+                    
+                    for &(lap_num, start_t, end_t) in lap_ranges {
+                        if end_t >= min_visible_x && start_t <= max_visible_x {
+                            let offset = start_t - ref_start;
+                            
+                            for lane in &lanes {
+                                for trace in &lane.traces {
+                                    let ref_slice = get_lap_points_slice(lap_ranges, trace.scaled_pts, ref_lap_num);
+                                    if !ref_slice.is_empty() {
+                                        let shifted: Vec<[f64; 2]> = ref_slice.iter().map(|p| [p[0] + offset, p[1]]).collect();
+                                        let dec_ref = decimate_points(&shifted);
+                                        plot_ui.line(Line::new(format!("WhiteRef_{}_{}", trace.name, lap_num), dec_ref).color(egui::Color32::WHITE).width(1.2));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // G. DRAW LAP BOUNDARY LINES
+            for &lap_start_time in lap_markers {
+                if lap_start_time > 0.0 {
+                    plot_ui.vline(VLine::new(format!("LapSeparator_{}", lap_start_time), lap_start_time)
+                        .color(egui::Color32::from_rgba_unmultiplied(220, 20, 60, 120))
+                        .style(egui_plot::LineStyle::dotted_dense())
+                        .width(1.0)
+                    );
+                }
+            }
+
+            // H. DRAW TIME TICKER LABELS
+            let step = if visible_width > 240.0 { 60.0 } else if visible_width > 120.0 { 30.0 } else if visible_width > 60.0 { 15.0 } else if visible_width > 30.0 { 10.0 } else if visible_width > 15.0 { 5.0 } else if visible_width > 5.0 { 2.0 } else { 0.5 };
+            let start_tick = (min_visible_x / step).floor() * step;
+            let end_tick = (max_visible_x / step).ceil() * step;
+            let mut current_tick = start_tick;
+            while current_tick <= end_tick {
+                if current_tick >= 0.0 && current_tick <= max_time {
+                    let tick_line_color = if is_dark { egui::Color32::from_rgb(28, 38, 41) } else { egui::Color32::from_rgb(180, 179, 178) };
+                    plot_ui.vline(VLine::new(format!("TickLine_{}", current_tick), current_tick).color(tick_line_color).width(1.0));
+                    let label_str = format_lap_time(current_tick);
+                    let display_text = label_str.get(3..8).unwrap_or("00:00");
+                    
+                    // FIXED: Text label color contrast bug! Uses high-contrast light grey-blue (DARK mode) or charcoal grey (LIGHT mode)
+                    let text_color = if is_dark { egui::Color32::from_rgb(120, 135, 140) } else { egui::Color32::from_rgb(80, 80, 80) };
+                    plot_ui.text(Text::new(format!("TickLabel_{}", current_tick), PlotPoint::new(current_tick, 4.75), egui::RichText::new(display_text).color(text_color).size(9.0)));
+                }
+                current_tick += step;
+            }
+
+            // I. DRAW OUTLAP/LAP OUTLINE LABELS
+            for (_lap_idx, &(lap_num, start_t, end_t)) in lap_ranges.iter().enumerate() {
+                if end_t >= min_visible_x && start_t <= max_visible_x {
+                    let center = (start_t + end_t) / 2.0;
+                    let label_str = if lap_num == 0 { "Outlap".to_string() } else { format!("Lap {}", lap_num) };
+                    let label_txt_color = if is_dark { egui::Color32::from_rgb(180, 195, 200) } else { egui::Color32::from_rgb(60, 70, 75) };
+                    plot_ui.text(Text::new(format!("LapLabelMarker_{}", lap_num), PlotPoint::new(center, 99.0), egui::RichText::new(label_str).color(label_txt_color).size(10.0).strong()));
+                }
+            }
+
+            // J. DRAW PLAYBACK CURSOR DOTS
+            if let Some(cx) = cursor_x {
+                plot_ui.vline(VLine::new("Cursor Line", cx).color(ACCENT_COLOR).width(1.5));
+                let idx = get_closest_index(&self.front_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
+                
+                for lane in &lanes {
+                    for trace in &lane.traces {
+                        if idx < trace.scaled_pts.len() {
+                            let scaled_y = trace.scaled_pts[idx][1];
+                            plot_ui.points(Points::new(format!("Dot_{}", trace.name), PlotPoints::from(vec![[cx, scaled_y]])).color(trace.color).radius(5.0));
+                        }
+                    }
+                }
+
+                // Slider Stamp
+                plot_ui.points(Points::new("Stamp Ticker", PlotPoints::from(vec![[cx, 4.75]])).color(ACCENT_COLOR).shape(egui_plot::MarkerShape::Up).radius(10.0));
+            }
+
+            // K. DOUBLE-CLICK HIGHLIGHT ZOOM
+            if is_highlight_active {
+                if let Some(x_start) = highlight_start {
+                    let current_x = plot_ui.pointer_coordinate().map(|p| p.x.clamp(0.0, max_time)).unwrap_or_else(|| cursor_x.unwrap_or(0.0));
+                    let start = f64::min(x_start, current_x);
+                    let end = f64::max(x_start, current_x);
+                    plot_ui.span(Span::new("Zoom Highlight", start..=end).axis(Axis::X).fill(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 32)).border_width(1.0).border_color(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 120)));
+                }
+            }
+
+            // L. TIME DRAG DETECTION & SCRUBBING
+            if plot_ui.ctx().input(|i| i.pointer.any_pressed()) {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    is_dragging_ticker = pointer_pos.y < 9.5;
+                }
+            }
+
+            if is_left_click_down {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    let click_pos = pointer_pos.x.clamp(0.0, max_time);
+                    if is_highlight_active {
+                        if !plot_ui.response().double_clicked() {
+                            if let Some(x_start) = highlight_start {
+                                let zoom_min = f64::min(x_start, click_pos);
+                                let zoom_max = f64::max(x_start, click_pos);
+                                if (zoom_max - zoom_min).abs() > 0.1 {
+                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
+                                    cursor_x = Some(zoom_min);
+                                    visible_x_range = Some((zoom_min, zoom_max));
+                                }
+                                is_highlight_active = false;
+                                highlight_start = None;
+                            }
+                        }
+                    } else if is_dragging_ticker {
+                        let pixel_delta_x = plot_ui.ctx().input(|i| i.pointer.delta().x);
+                        let plot_width_pixels = plot_ui.response().rect.width();
+                        let pixels_per_second = (plot_width_pixels as f64) / visible_width;
+                        let seconds_delta = (pixel_delta_x as f64) / pixels_per_second;
+                        let new_min = (min_visible_x - seconds_delta).clamp(0.0, max_time - visible_width);
+                        let new_max = new_min + visible_width;
+                        plot_ui.set_plot_bounds_x(new_min..=new_max);
+                        visible_x_range = Some((new_min, new_max));
+                    } else {
+                        cursor_x = Some(click_pos);
+                    }
+                }
+            }
+
+            // M. SILKY-SMOOTH HIGH-PRECISION ZOOM WHEEL
+            if !is_left_click_down {
+                let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
+                if scroll.y.abs() > 1.5 {
+                    let is_zooming_in = scroll.y > 0.0;
+                    let zoom_factor = if is_zooming_in { 0.925 } else { 1.075 };
+                    let mut target_width = visible_width * zoom_factor;
+                    target_width = target_width.clamp(1.5, max_time);
+                    let center = if is_zooming_in { cursor_x.unwrap_or((min_visible_x + max_visible_x) / 2.0) } else { (min_visible_x + max_visible_x) / 2.0 };
+                    let half_width = target_width / 2.0;
+                    let mut new_min = center - half_width;
+                    let mut mut_new_max = center + half_width;
+                    if new_min < 0.0 {
+                        let overflow = 0.0 - new_min;
+                        new_min = 0.0;
+                        mut_new_max = (mut_new_max + overflow).min(max_time);
+                    } else if mut_new_max > max_time {
+                        let overflow = mut_new_max - max_time;
+                        mut_new_max = max_time;
+                        new_min = (new_min - overflow).max(0.0);
+                    }
+                    if new_min < mut_new_max {
+                        plot_ui.set_plot_bounds_x(new_min..=mut_new_max);
+                        visible_x_range = Some((new_min, mut_new_max));
+                    }
+                }
+            }
+        });
+
+        // 5. RESTORE COPIES BACK TO APP STATE IN CONSTANT TIME
+        self.cursor_x = cursor_x;
+        self.visible_x_range = visible_x_range;
+        self.reset_bounds_flag = reset_bounds_flag;
+        self.is_dragging_ticker = is_dragging_ticker;
+        self.is_highlight_active = is_highlight_active;
+        self.highlight_start = highlight_start;
     }
 }
 
 // Formats seconds into MM:SS.SSS
-fn format_lap_time(sec: f64) -> String {
-    let minutes = (sec / 60.0).floor() as i32;
-    let seconds = (sec % 60.0).floor() as i32;
-    let ms = ((sec % 1.0) * 1000.0).round() as i32;
-    format!("{:02}:{:02}.{:03}", minutes, seconds, ms)
-}
-
-// Spawns a background thread to download the track map SVG from the public iRacing static assets CDN
-fn trigger_track_map_download(track_id: i32) {
-    if track_id <= 0 { return; }
-    std::thread::spawn(move || {
-        let dest_dir = std::path::Path::new("exports/track_maps");
-        if !dest_dir.exists() {
-            let _ = std::fs::create_dir_all(dest_dir);
-        }
-        let dest_file = dest_dir.join(format!("{}.svg", track_id));
-
-        // Only download if the file does not already exist
-        if !dest_file.exists() {
-            println!("Downloading track map SVG for track_id: {} to: {}", track_id, dest_file.display());
-            
-            // Try official iRacing static CDN first (requires curl -f to fail on 404/403)
-            let official_url = format!("https://images-static.iracing.com/tracks/{}/track.svg", track_id);
-            let status = std::process::Command::new("curl")
-                .arg("-s")
-                .arg("-f")
-                .arg("-L")
-                .arg("-o")
-                .arg(&dest_file)
-                .arg(&official_url)
-                .status();
-
-            let success = match status {
-                Ok(s) => s.success(),
-                _ => false,
-            };
-
-            // If official CDN fails, automatically fallback to the community GitHub cdn mirror!
-            if !success {
-                let fallback_url = format!("https://cdn.jsdelivr.net/gh/iTelemetry/iracing-tracks/svgs/{}.svg", track_id);
-                let _ = std::process::Command::new("curl")
-                    .arg("-s")
-                    .arg("-f")
-                    .arg("-L")
-                    .arg("-o")
-                    .arg(&dest_file)
-                    .arg(&fallback_url)
-                    .status();
-            }
-        }
-    });
+fn height_offset(ui: &egui::Ui) -> f32 {
+    let screen_height = ui.ctx().screen_rect().height();
+    screen_height / 2.0
 }
 
 impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         
         // --- DYNAMIC BRAND THEMING SWITCHER ---
-        // Dynamically applies background and selection highlights based on light/dark mode changes!
         let mut style = (*ctx.style()).clone();
         let is_dark = style.visuals.dark_mode;
         
@@ -508,7 +1464,6 @@ impl eframe::App for OpenDavApp {
                                 );
 
                                 if ui.is_rect_visible(rect) {
-                                    // Use dynamic progress bar backgrounds based on theme
                                     let progress_bg = if is_dark { egui::Color32::from_rgb(25, 25, 25) } else { egui::Color32::from_rgb(200, 200, 200) };
                                     ui.painter().rect_filled(rect, 3.0, progress_bg);
 
@@ -545,7 +1500,7 @@ impl eframe::App for OpenDavApp {
                         ui.add_space(15.0);
                         
                         match self.active_page {
-                            ActivePage::OpenDav => {
+                            ActivePage::OpenDav | ActivePage::Reports => {
                                 // 1. CUSTOM CORNER LOGO HEADER
                                 let corner_bytes = include_bytes!("../assets/corner_logo.png");
                                 ui.vertical_centered(|ui| {
@@ -607,13 +1562,33 @@ impl eframe::App for OpenDavApp {
                                                 // Default to fastest lap on first entering graphs page
                                                 if self.session_loaded && self.selected_lap.is_none() {
                                                     if let Some(session) = &self.session {
-                                                        let fastest = session.lap_times.iter()
-                                                            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                                                            .map(|(l, _)| *l);
-                                                        self.selected_lap = fastest;
+                                                         let fastest_lap = get_fastest_lap(&session.lap_times);
+                                                         self.selected_lap = if fastest_lap > 0 { Some(fastest_lap) } else { None };
                                                         self.rebuild_points_cache();
                                                     }
                                                 }
+                                            }
+                                        });
+
+                                    ui.add_space(15.0);
+
+                                    // 3. Reports Image Button
+                                    let rep_bytes = include_bytes!("../assets/button_reports.png");
+                                    let is_rep_selected = self.active_page == ActivePage::Reports;
+                                    let border_color_rep = if is_rep_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
+
+                                    egui::Frame::none()
+                                        .stroke(egui::Stroke::new(2.0, border_color_rep))
+                                        .rounding(8.0)
+                                        .inner_margin(1.0)
+                                        .show(ui, |ui| {
+                                            let img_rep = egui::Image::from_bytes("bytes://button_reports.png", rep_bytes.to_vec())
+                                                .max_width(240.0)
+                                                .rounding(8.0)
+                                                .sense(egui::Sense::click());
+                                            let resp = ui.add(img_rep);
+                                            if resp.clicked() {
+                                                self.active_page = ActivePage::Reports;
                                             }
                                         });
                                 });
@@ -629,23 +1604,20 @@ impl eframe::App for OpenDavApp {
                                     ui.separator();
                                     ui.add_space(10.0);
 
-                                    ui.label(egui::RichText::new("LAP TIMELINE SELECT").color(egui::Color32::DARK_GRAY).size(10.0).strong());
+                                    let select_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
+                                    ui.label(egui::RichText::new("LAP TIMELINE SELECT").color(select_hdr_color).size(10.0).strong());
                                     ui.add_space(8.0);
 
                                     if !self.session_loaded || self.session.is_none() {
                                         ui.label(egui::RichText::new("No Session Active").color(egui::Color32::GRAY).small());
                                     } else {
-                                        // CLONE LAP TIMES AND AVOID IN-CLOSURE IMMUTABLE MUT MUTATION LOCKS
                                         let lap_times = if let Some(session) = &self.session {
                                             session.lap_times.clone()
                                         } else {
                                             Vec::new()
                                         };
 
-                                        let fastest_lap = lap_times.iter()
-                                            .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                                            .map(|(l, _)| *l)
-                                            .unwrap_or(0);
+                                        let fastest_lap = get_fastest_lap(&lap_times);
 
                                         let sidebar_style = ui.style_mut();
                                         sidebar_style.spacing.button_padding = egui::vec2(12.0, 8.0);
@@ -654,7 +1626,7 @@ impl eframe::App for OpenDavApp {
                                             ui.vertical(|ui| {
                                                 for (lap_num, duration) in &lap_times {
                                                     let is_selected = self.selected_lap == Some(*lap_num);
-                                                    let is_fastest = *lap_num == fastest_lap;
+                                                    let is_fastest = *lap_num == fastest_lap && *lap_num > 0;
 
                                                     let is_cyan = self.ref_lap_cyan == Some(*lap_num);
                                                     let is_white = self.ref_lap_white == Some(*lap_num);
@@ -669,7 +1641,8 @@ impl eframe::App for OpenDavApp {
 
                                                     ui.horizontal(|ui| {
                                                         // 1. Cyan Reference Toggle Box (Left)
-                                                        let btn_c = ui.selectable_label(is_cyan, egui::RichText::new("C").color(if is_cyan { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::DARK_GRAY }).strong());
+                                                        let active_cyan = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 136, 170) };
+                                                        let btn_c = ui.selectable_label(is_cyan, egui::RichText::new("C").color(if is_cyan { active_cyan } else { egui::Color32::DARK_GRAY }).strong());
                                                         if btn_c.clicked() {
                                                             if is_cyan {
                                                                 self.ref_lap_cyan = None;
@@ -679,7 +1652,8 @@ impl eframe::App for OpenDavApp {
                                                         }
 
                                                         // 2. White Reference Toggle Box (Right)
-                                                        let btn_w = ui.selectable_label(is_white, egui::RichText::new("W").color(if is_white { egui::Color32::WHITE } else { egui::Color32::DARK_GRAY }).strong());
+                                                        let active_white = if is_dark { egui::Color32::WHITE } else { egui::Color32::from_rgb(40, 40, 40) };
+                                                        let btn_w = ui.selectable_label(is_white, egui::RichText::new("W").color(if is_white { active_white } else { egui::Color32::DARK_GRAY }).strong());
                                                         if btn_w.clicked() {
                                                             if is_white {
                                                                 self.ref_lap_white = None;
@@ -715,7 +1689,7 @@ impl eframe::App for OpenDavApp {
 
                         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                             ui.add_space(10.0);
-                            ui.label(egui::RichText::new("v3.0.0-rs").color(egui::Color32::DARK_GRAY).small());
+                            ui.label(egui::RichText::new("v0.1.0-rs").color(egui::Color32::DARK_GRAY).small());
                         });
                     });
 
@@ -741,10 +1715,8 @@ impl eframe::App for OpenDavApp {
                                         
                                         // Auto-load fastest lap in caching layer on file load
                                         if let Some(session) = &self.session {
-                                            let fastest = session.lap_times.iter()
-                                                .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                                                .map(|(l, _)| *l);
-                                            self.selected_lap = fastest;
+                                             let fastest = get_fastest_lap(&session.lap_times);
+                                             self.selected_lap = if fastest > 0 { Some(fastest) } else { None };
                                         }
                                         self.cursor_x = None;
                                         self.rebuild_points_cache();
@@ -774,7 +1746,7 @@ impl eframe::App for OpenDavApp {
                     ui.add_space(6.0);
                 });
 
-                // --- CENTRAL PAGE RENDERER (With smooth fade animation) ---
+                // --- CENTRAL PAGE RENDERER ---
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.set_opacity(self.fade_value);
 
@@ -798,7 +1770,7 @@ impl eframe::App for OpenDavApp {
                                 let lap_times = session_ref.lap_times.clone();
                                 let _num_samples = session_ref.distance.len();
 
-                                ui.heading(egui::RichText::new("Session Intelligence Dashboard").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                                ui.heading(egui::RichText::new("Dashboard").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
                                 ui.add_space(8.0);
 
                                 // 1. Session Metadata Grid Card
@@ -845,11 +1817,19 @@ impl eframe::App for OpenDavApp {
 
                                     cols[2].group(|ui| {
                                         ui.vertical_centered(|ui| {
-                                            let avg_lap = if !lap_times.is_empty() {
-                                                let sum: f64 = lap_times.iter().map(|(_, t)| *t).sum();
-                                                sum / lap_times.len() as f64
-                                            } else {
-                                                0.0
+                                            let avg_lap = {
+                                                let filtered: Vec<&(i32, f64)> = lap_times.iter()
+                                                    .filter(|(lap_num, _)| *lap_num > 3)
+                                                    .collect();
+                                                if !filtered.is_empty() {
+                                                    let sum: f64 = filtered.iter().map(|val| val.1).sum();
+                                                    sum / filtered.len() as f64
+                                                } else if !lap_times.is_empty() {
+                                                     let sum: f64 = lap_times.iter().map(|val| val.1).sum();
+                                                     sum / lap_times.len() as f64
+                                                } else {
+                                                    0.0
+                                                }
                                             };
                                             ui.label(egui::RichText::new("AVERAGE LAP TIME").color(egui::Color32::DARK_GRAY).small().strong());
                                             ui.add_space(4.0);
@@ -860,91 +1840,65 @@ impl eframe::App for OpenDavApp {
 
                                 ui.add_space(15.0);
 
-                                let fastest_lap = lap_times.iter()
-                                    .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                                    .map(|(l, _)| *l)
-                                    .unwrap_or(0);
+                                let fastest_lap = get_fastest_lap(&lap_times);
 
                                 // 3. Stacked lower Dashboard (Top: Laps List, Bottom: Huge Track Map SVG!)
                                 ui.vertical(|ui| {
-                                    ui.label(egui::RichText::new("VALID LAP SHEET").color(egui::Color32::LIGHT_GRAY).strong().size(11.0));
+                                    let sheet_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
+                                    ui.label(egui::RichText::new("VALID LAP SHEET").color(sheet_hdr_color).strong().size(11.0));
                                     ui.add_space(4.0);
 
-                                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                                        ui.vertical(|ui| {
-                                            for (lap_num, duration) in &lap_times {
-                                                let is_fastest = *lap_num == fastest_lap;
-                                                
-                                                ui.group(|ui| {
-                                                    ui.columns(3, |cols| {
-                                                        if is_fastest {
-                                                            cols[0].label(egui::RichText::new(format!("Lap {}", lap_num)).strong().color(SUB_ACCENT_COLOR));
-                                                            cols[1].label(egui::RichText::new(format_lap_time(*duration)).strong().color(SUB_ACCENT_COLOR));
-                                                            cols[2].label(egui::RichText::new("★ FASTEST").strong().color(SUB_ACCENT_COLOR));
-                                                        } else {
-                                                            cols[0].label(egui::RichText::new(format!("Lap {}", lap_num)).color(egui::Color32::LIGHT_GRAY));
-                                                            cols[1].label(egui::RichText::new(format_lap_time(*duration)).color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
-                                                            cols[2].label(egui::RichText::new("Valid").color(egui::Color32::DARK_GRAY));
-                                                        }
-                                                    });
-                                                });
-                                                ui.add_space(2.0);
-                                            }
-                                        });
-                                    });
-
-                                    ui.add_space(15.0);
-                                    ui.label(egui::RichText::new("VENUE DIRECTORY TRACK MAP").color(egui::Color32::LIGHT_GRAY).strong().size(11.0));
-                                    ui.add_space(4.0);
-
-                                    ui.group(|ui| {
-                                        ui.set_min_height(250.0);
-                                        ui.vertical_centered_justified(|ui| {
-                                            let track_id = session_ref.track_id;
-                                            let map_path = format!("exports/track_maps/{}.svg", track_id);
-                                            let path_buf = std::path::Path::new(&map_path);
-
-                                            if path_buf.exists() {
-                                                // Natively read the file bytes to avoid UNC path formatting bugs on Windows!
-                                                match std::fs::read(path_buf) {
-                                                    Ok(svg_bytes) => {
-                                                        // Verify the file actually contains valid SVG data and is not an HTML 404 error page!
-                                                        let len = usize::min(svg_bytes.len(), 100);
-                                                        let header = String::from_utf8_lossy(&svg_bytes[..len]);
-                                                        
-                                                        if header.contains("<html") || header.contains("<HTML") {
-                                                            // It's a broken HTML error page! Delete it so we can fall back or re-download
-                                                            let _ = std::fs::remove_file(path_buf);
-                                                            
-                                                            // Show placeholder since we just deleted the corrupt file
-                                                            ui.add_space(80.0);
-                                                            ui.spinner();
-                                                            ui.add_space(10.0);
-                                                            ui.label(egui::RichText::new("SYNCING VENUE LAYOUT SVG...").color(ACCENT_COLOR).strong().size(10.0));
-                                                            ui.add_space(80.0);
-                                                        } else {
-                                                            let img = egui::Image::from_bytes(format!("bytes://track_map_{}.svg", track_id), svg_bytes)
-                                                                .max_height(340.0) // 60% LARGER map! Look at that gorgeous outline!
-                                                                .maintain_aspect_ratio(true)
-                                                                .tint(ACCENT_COLOR); // Tint the vector line using our beautiful Electric Blaze Orange!
-                                                            ui.add(img);
+                                    egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                                        egui::Grid::new("valid_laps_grid")
+                                            .striped(true)
+                                            .min_col_width(200.0)
+                                            .spacing([24.0, 10.0])
+                                            .show(ui, |ui| {
+                                                let cols = 4;
+                                                let mut col_count = 0;
+                                                for (lap_num, duration) in &lap_times {
+                                                    let is_fastest = *lap_num == fastest_lap;
+                                                    let is_selected = self.selected_lap == Some(*lap_num);
+                                                    
+                                                    let mut row_text = format!("Lap {} : {}", lap_num, format_lap_time(*duration));
+                                                    if is_fastest {
+                                                        row_text += " ★ FASTEST";
+                                                    }
+                                                    
+                                                    let row_color = if is_selected {
+                                                        ACCENT_COLOR
+                                                    } else if is_fastest {
+                                                        SUB_ACCENT_COLOR
+                                                    } else {
+                                                        if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                                                    };
+                                                    
+                                                    if ui.selectable_label(is_selected, egui::RichText::new(row_text).color(row_color).strong()).clicked() {
+                                                        self.selected_lap = Some(*lap_num);
+                                                        if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == *lap_num) {
+                                                            let (_, start_t, _end_t) = self.lap_ranges[pos];
+                                                            self.cursor_x = Some(start_t);
+                                                            self.reset_bounds_flag = true;
                                                         }
                                                     }
-                                                    Err(e) => {
-                                                        ui.add_space(100.0);
-                                                        ui.label(format!("Failed to read track map: {}", e));
+                                                    
+                                                    col_count += 1;
+                                                    if col_count >= cols {
+                                                        ui.end_row();
+                                                        col_count = 0;
                                                     }
                                                 }
-                                            } else {
-                                                // Show downloading placeholder
-                                                ui.add_space(80.0);
-                                                ui.spinner();
-                                                ui.add_space(10.0);
-                                                ui.label(egui::RichText::new("SYNCING VENUE LAYOUT SVG...").color(ACCENT_COLOR).strong().size(10.0));
-                                                ui.add_space(80.0);
-                                            }
-                                        });
+                                            });
                                     });
+                                });
+
+                                ui.add_space(15.0);
+                                let map_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
+                                ui.label(egui::RichText::new(venue.to_uppercase()).color(map_hdr_color).strong().size(11.0));
+                                ui.add_space(4.0);
+
+                                ui.group(|ui| {
+                                    self.draw_interactive_track_map(ui, 340.0);
                                 });
 
                                 ui.add_space(15.0);
@@ -974,831 +1928,38 @@ impl eframe::App for OpenDavApp {
                                     let tab_style = ui.style_mut();
                                     tab_style.spacing.button_padding = egui::vec2(12.0, 8.0); // Perfect, professional tab sizing
 
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Basic, "🏁  1. Basic (Inputs)");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DynamicRake, "📈  2. Dynamic Rake");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireEnergy, "🔥  3. Tire Energy");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireFuelWindows, "🔋  4. Tire & Fuel");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireTempLoad, "🌡  5. Temp/Load Map");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::MathSandbox, "🧮  6. Custom Math");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::EmpiricalAero, "🗺  7. Aero Map");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DownforceMapping, "💨  8. Downforce");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::PitchPlatform, "📐  9. Pitch & Platform");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::HandlingAnalyzer, "🎯  10. Handling");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TlltdDistribution, "🔄  11. TLLTD");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::CompressionRates, "🚀  12. Compression");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Basic, "1. Basic (Inputs)");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DynamicRake, "2. Dynamic Rake");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireEnergy, "3. Tire Energy");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireFuelWindows, "4. Tire & Fuel");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireTempLoad, "5. Temp/Load Map");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::MathSandbox, "6. Custom Math");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::EmpiricalAero, "7. Aero Map");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DownforceMapping, "8. Downforce");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::PitchPlatform, "9. Pitch & Platform");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::HandlingAnalyzer, "10. Handling");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TlltdDistribution, "11. TLLTD");
+                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::CompressionRates, "12. Compression");
                                 });
 
                                 ui.add_space(10.0);
                                 ui.separator();
                                 ui.add_space(10.0);
 
+                                // Calculate if tab was switched this frame to trigger shared viewport boundary syncing!
+                                let mut is_tab_switch = false;
+                                if Some(self.active_worksheet) != self.previous_worksheet {
+                                    is_tab_switch = true;
+                                    self.previous_worksheet = Some(self.active_worksheet);
+                                }
+
                                 // 2. ACTIVE WORKSHEET PLOTTING AREA (SINGLE INTEGRATED HIGH-PERFORMANCE PLOT ENVIRONMENT!)
-                                // Extract sizes and session metrics natively
-                                let max_time = self.front_pts_cache.last().map(|p| p[0]).unwrap_or(100.0);
-                                let session_ref = self.session.as_ref().unwrap();
-
-                                // Retrieve active screen bounds to process interactive drag scrubbing & edge panning!
-                                let mut plot_height = ui.available_height() - 10.0;
-                                if plot_height < 300.0 { plot_height = 300.0; }
-
-                                // Create the unified integrated Plot container taking up 100% of available screen space!
-                                let mut plot = Plot::new("integrated_mo_tec_canvas")
-                                    .height(plot_height) // Fills entire screen vertically!
-                                    // DISABLE ALL NATIVE DRAG/ZOOM/SCROLLS TO COMPLETELY PREVENT RENDERING FIGHTS & GRAPH DISAPPEARANCES!
-                                    .allow_zoom([false, false])
-                                    .allow_scroll([false, false])
-                                    .allow_drag([false, false])
-                                    .allow_boxed_zoom(false)
-                                    .allow_double_click_reset(false)
-                                    .auto_bounds([false, false])
-                                    .include_y(0.0)
-                                    .include_y(100.0)
-                                    .allow_axis_zoom_drag([false, false]);
-
-                                // Format the horizontal timeline into clean MoTeC timestamps
-                                plot = plot.x_axis_formatter(|tick, _range| {
-                                    let sec = tick.value;
-                                    let minutes = (sec / 60.0).floor() as i32;
-                                    let seconds = (sec % 60.0).floor() as i32;
-                                    let ms = ((sec % 1.0) * 10.0).round() as i32; // tenths
-                                    format!("{:02}:{:02}.{}", minutes, seconds, ms)
-                                });
-
-                                plot = plot.show_axes([true, false]);
-
                                 match self.active_worksheet {
                                     WorksheetTab::Basic => {
-                                        // 3. Extract exact unscaled physical values from session using locked cursor index!
-                                        let mut raw_val_speed = 0.0;
-                                        let mut raw_val_throttle = 0.0;
-                                        let mut raw_val_brake = 0.0;
-                                        let mut raw_val_steering = 0.0;
-                                        let mut raw_val_rpm = 0.0;
-                                        let mut raw_val_gear = 0.0;
-
-                                        if let Some(ref mut cx) = self.cursor_x {
-                                            *cx = cx.clamp(0.0, max_time);
-                                            let idx = get_closest_index(&self.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), *cx);
-                                            
-                                            // Look up raw database variables at the active cursor sample
-                                            let speed_col = session_ref.dataframe.column("Speed").ok().map(|c| c.f64().ok()).flatten();
-                                            let throttle_col = session_ref.dataframe.column("Throttle").ok().map(|c| c.f64().ok()).flatten();
-                                            let brake_col = session_ref.dataframe.column("Brake").ok().map(|c| c.f64().ok()).flatten();
-                                            let steering_col = session_ref.dataframe.column("SteeringWheelAngle").ok().map(|c| c.f64().ok()).flatten();
-                                            let rpm_col = session_ref.dataframe.column("RPM").ok().map(|c| c.f64().ok()).flatten();
-                                            let gear_col = session_ref.dataframe.column("Gear").ok().map(|c| c.f64().ok()).flatten();
-
-                                            raw_val_speed = speed_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 3.6;
-                                            raw_val_throttle = throttle_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
-                                            raw_val_brake = brake_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
-                                            raw_val_steering = steering_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 57.2958;
-                                            raw_val_rpm = rpm_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0);
-                                            raw_val_gear = gear_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0);
-                                        }
-
-                                        ui.horizontal(|ui| {
-                                            if let Some(cx) = self.cursor_x {
-                                                ui.colored_label(ACCENT_COLOR, format!("⏱  PLAYBACK @ {}", format_lap_time(cx)));
-                                                ui.separator();
-                                                ui.colored_label(SPEED_COLOR, format!("Speed: {:.1} km/h", raw_val_speed));
-                                                ui.separator();
-                                                ui.colored_label(egui::Color32::from_rgb(46, 204, 113), format!("Throttle: {:.0}%", raw_val_throttle));
-                                                ui.separator();
-                                                ui.colored_label(egui::Color32::from_rgb(231, 76, 60), format!("Brake: {:.0}%", raw_val_brake));
-                                                ui.separator();
-                                                ui.colored_label(SUB_ACCENT_COLOR, format!("Steering: {:.1}°", raw_val_steering));
-                                                ui.separator();
-                                                ui.colored_label(egui::Color32::from_rgb(241, 196, 15), format!("RPM: {:.0}", raw_val_rpm));
-                                                ui.separator();
-                                                ui.colored_label(egui::Color32::WHITE, format!("Gear: {}", if raw_val_gear < 0.0 { "R".to_string() } else if raw_val_gear == 0.0 { "N".to_string() } else { format!("{:.0}", raw_val_gear) }));
-                                            }
-                                        });
-                                        ui.add_space(4.0);
-
-                                        plot.show(ui, |plot_ui| {
-                                            let is_left_click_down = plot_ui.ctx().input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-                                            if self.reset_bounds_flag {
-                                                if let Some(sel_lap) = self.selected_lap {
-                                                    if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == sel_lap) {
-                                                        let (_, start_t, _end_t) = self.lap_ranges[pos];
-                                                        let end_time_focus = if pos + 1 < self.lap_ranges.len() {
-                                                            self.lap_ranges[pos + 1].1
-                                                        } else {
-                                                            max_time
-                                                        };
-                                                        plot_ui.set_plot_bounds_x(start_t..=end_time_focus);
-                                                    } else {
-                                                        plot_ui.set_plot_bounds_x(0.0..=max_time);
-                                                    }
-                                                } else {
-                                                    plot_ui.set_plot_bounds_x(0.0..=max_time);
-                                                }
-                                                self.reset_bounds_flag = false;
-                                            }
-
-                                            let active_bounds = plot_ui.plot_bounds();
-                                            let min_visible_x = active_bounds.min()[0];
-                                            let max_visible_x = active_bounds.max()[0];
-                                            let visible_width = max_visible_x - min_visible_x;
-
-                                            // Slicing and decimating helper
-                                            let decimate_points = |cache: &Vec<[f64; 2]>| -> PlotPoints {
-                                                if cache.is_empty() { return PlotPoints::default(); }
-                                                let start_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&min_visible_x).unwrap_or(std::cmp::Ordering::Equal)) {
-                                                    Ok(idx) => idx,
-                                                    Err(idx) => idx,
-                                                }.saturating_sub(1);
-                                                let end_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&max_visible_x).unwrap_or(std::cmp::Ordering::Equal)) {
-                                                    Ok(idx) => idx,
-                                                    Err(idx) => idx,
-                                                }.min(cache.len());
-                                                let slice = &cache[start_idx..end_idx];
-                                                let m = slice.len();
-                                                if m <= 2000 {
-                                                    slice.to_vec().into()
-                                                } else {
-                                                    let stride = m / 2000;
-                                                    let mut downsampled = Vec::with_capacity(2002);
-                                                    downsampled.push(slice[0]);
-                                                    let mut idx = 1;
-                                                    while idx < m - 1 {
-                                                        downsampled.push(slice[idx]);
-                                                        idx += stride;
-                                                    }
-                                                    downsampled.push(slice[m - 1]);
-                                                    downsampled.into()
-                                                }
-                                            };
-
-                                            let speed_dec_pts = decimate_points(&self.speed_pts_cache);
-                                            let throttle_dec_pts = decimate_points(&self.throttle_pts_cache);
-                                            let brake_dec_pts = decimate_points(&self.brake_pts_cache);
-                                            let steering_dec_pts = decimate_points(&self.steering_pts_cache);
-                                            let rpm_dec_pts = decimate_points(&self.rpm_pts_cache);
-
-                                            // 1. Draw Axis Dividers separating our 4 lanes cleanly
-                                            let div_color = if is_dark { egui::Color32::from_rgb(25, 30, 32) } else { egui::Color32::from_rgb(205, 204, 203) };
-                                            plot_ui.hline(HLine::new("Top Lane Divider", 74.0).color(div_color).width(1.0));
-                                            plot_ui.hline(HLine::new("Middle-Upper Divider", 50.0).color(div_color).width(1.0));
-                                            plot_ui.hline(HLine::new("Middle-Lower Divider", 26.0).color(div_color).width(1.0));
-                                            plot_ui.hline(HLine::new("Bottom Ticker Divider", 9.5).color(div_color).width(1.0));
-
-                                            // 2. Draw our Sleek Interactive Dark Ticker timeline background bar!
-                                            let track_color = if is_dark { egui::Color32::from_rgb(12, 18, 20) } else { egui::Color32::from_rgb(215, 214, 213) };
-                                            plot_ui.hline(HLine::new("Timeline Track", 4.75).color(track_color).width(9.5));
-
-                                            // 3. Draw Stacked Decimated Curves (Guarantees silky-smooth vertex rendering!)
-                                            // Lane 1: Speed [76.0, 98.0]
-                                            plot_ui.line(Line::new("Speed (km/h)", speed_dec_pts).color(SPEED_COLOR).width(2.2));
-                                            
-                                            // Lane 2: RPM [52.0, 72.0]
-                                            plot_ui.line(Line::new("Engine RPM", rpm_dec_pts).color(egui::Color32::from_rgb(241, 196, 15)).width(2.2));
-                                            
-                                            // Lane 3: Throttle and Brake overlaid! [28.0, 48.0]
-                                            plot_ui.line(Line::new("Throttle (%)", throttle_dec_pts).color(egui::Color32::from_rgb(46, 204, 113)).width(2.2));
-                                            plot_ui.line(Line::new("Brake (%)", brake_dec_pts).color(egui::Color32::from_rgb(231, 76, 60)).width(2.2));
-
-                                            // Lane 4: Steering Angle [10.0, 24.0]
-                                            plot_ui.line(Line::new("Steering Angle (°)", steering_dec_pts).color(SUB_ACCENT_COLOR).width(2.2));
-
-                                            // --- DYNAMIC MOTEC MULTI-LAP REFERENCE OVERLAYS ---
-                                            // A. Bright Cyan Overlay Reference Lap
-                                            if let Some(ref_lap_num) = self.ref_lap_cyan {
-                                                let ref_start = self.lap_ranges.iter().find(|r| r.0 == ref_lap_num).map(|r| r.1).unwrap_or(0.0);
-                                                let slice_speed = self.get_lap_points_slice(&self.speed_pts_cache, ref_lap_num);
-                                                let slice_rpm = self.get_lap_points_slice(&self.rpm_pts_cache, ref_lap_num);
-                                                let slice_thr = self.get_lap_points_slice(&self.throttle_pts_cache, ref_lap_num);
-                                                let slice_brk = self.get_lap_points_slice(&self.brake_pts_cache, ref_lap_num);
-                                                let slice_steer = self.get_lap_points_slice(&self.steering_pts_cache, ref_lap_num);
-
-                                                if !slice_speed.is_empty() {
-                                                    for &(lap_num, start_t, end_t) in &self.lap_ranges {
-                                                        if end_t >= min_visible_x && start_t <= max_visible_x {
-                                                            let offset = start_t - ref_start;
-                                                            let dec_spd = decimate_points(&slice_speed.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_rpm = decimate_points(&slice_rpm.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_thr = decimate_points(&slice_thr.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_brk = decimate_points(&slice_brk.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_steer = decimate_points(&slice_steer.iter().map(|p| [p[0] + offset, p[1]]).collect());
-
-                                                            plot_ui.line(Line::new(format!("Speed Cyan Ref Lap{}", lap_num), dec_spd).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("RPM Cyan Ref Lap{}", lap_num), dec_rpm).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Thr Cyan Ref Lap{}", lap_num), dec_thr).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Brk Cyan Ref Lap{}", lap_num), dec_brk).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Steer Cyan Ref Lap{}", lap_num), dec_steer).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // B. Pure White Overlay Reference Lap
-                                            if let Some(ref_lap_num) = self.ref_lap_white {
-                                                let ref_start = self.lap_ranges.iter().find(|r| r.0 == ref_lap_num).map(|r| r.1).unwrap_or(0.0);
-                                                let slice_speed = self.get_lap_points_slice(&self.speed_pts_cache, ref_lap_num);
-                                                let slice_rpm = self.get_lap_points_slice(&self.rpm_pts_cache, ref_lap_num);
-                                                let slice_thr = self.get_lap_points_slice(&self.throttle_pts_cache, ref_lap_num);
-                                                let slice_brk = self.get_lap_points_slice(&self.brake_pts_cache, ref_lap_num);
-                                                let slice_steer = self.get_lap_points_slice(&self.steering_pts_cache, ref_lap_num);
-
-                                                if !slice_speed.is_empty() {
-                                                    for &(lap_num, start_t, end_t) in &self.lap_ranges {
-                                                        if end_t >= min_visible_x && start_t <= max_visible_x {
-                                                            let offset = start_t - ref_start;
-                                                            let dec_spd = decimate_points(&slice_speed.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_rpm = decimate_points(&slice_rpm.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_thr = decimate_points(&slice_thr.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_brk = decimate_points(&slice_brk.iter().map(|p| [p[0] + offset, p[1]]).collect());
-                                                            let dec_steer = decimate_points(&slice_steer.iter().map(|p| [p[0] + offset, p[1]]).collect());
-
-                                                            plot_ui.line(Line::new(format!("Speed White Ref Lap{}", lap_num), dec_spd).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("RPM White Ref Lap{}", lap_num), dec_rpm).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Thr White Ref Lap{}", lap_num), dec_thr).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Brk White Ref Lap{}", lap_num), dec_brk).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Steer White Ref Lap{}", lap_num), dec_steer).color(egui::Color32::WHITE).width(1.2));
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // 4. Draw thin red dotted column lines flagging LAP BOUNDARY SEPARATIONS (MoTeC Style!)
-                                            for &lap_start_time in &self.lap_markers {
-                                                if lap_start_time > 0.0 {
-                                                    plot_ui.vline(VLine::new(format!("LapSeparator_{}", lap_start_time), lap_start_time)
-                                                        .color(egui::Color32::from_rgba_unmultiplied(220, 20, 60, 120)) // Slate Red, translucent
-                                                        .style(egui_plot::LineStyle::dotted_dense())
-                                                        .width(1.0)
-                                                    );
-                                                }
-                                            }
-
-                                            // 5. Draw Custom Symmetrical Time Stamp Tickers & Labels Inside the Interactive Timeline Track!
-                                            let step = if visible_width > 240.0 { 60.0 } else if visible_width > 120.0 { 30.0 } else if visible_width > 60.0 { 15.0 } else if visible_width > 30.0 { 10.0 } else if visible_width > 15.0 { 5.0 } else if visible_width > 5.0 { 2.0 } else { 0.5 };
-                                            let start_tick = (min_visible_x / step).floor() * step;
-                                            let end_tick = (max_visible_x / step).ceil() * step;
-                                            let mut current_tick = start_tick;
-                                            while current_tick <= end_tick {
-                                                if current_tick >= 0.0 && current_tick <= max_time {
-                                                    let tick_line_color = if is_dark { egui::Color32::from_rgb(28, 38, 41) } else { egui::Color32::from_rgb(180, 179, 178) };
-                                                    plot_ui.vline(VLine::new(format!("TickLine_{}", current_tick), current_tick).color(tick_line_color).width(1.0));
-                                                    let label_str = format_lap_time(current_tick);
-                                                    let display_text = label_str.get(3..8).unwrap_or("00:00");
-                                                    let text_color = if is_dark { egui::Color32::from_rgb(120, 135, 140) } else { egui::Color32::from_rgb(80, 80, 80) };
-                                                    plot_ui.text(Text::new(format!("TickLabel_{}", current_tick), PlotPoint::new(current_tick, 4.75), egui::RichText::new(display_text).color(text_color).size(9.0)));
-                                                }
-                                                current_tick += step;
-                                            }
-
-                                            // 6. Draw Elegant Lap Label Markers Just Above the Graph (Right Under Tooltips)
-                                            for (lap_idx, &(lap_num, start_t, end_t)) in self.lap_ranges.iter().enumerate() {
-                                                if end_t >= min_visible_x && start_t <= max_visible_x {
-                                                    let center = (start_t + end_t) / 2.0;
-                                                    let label_str = if lap_idx == 0 { "Outlap".to_string() } else { format!("Lap {}", lap_idx) };
-                                                    let label_txt_color = if is_dark { egui::Color32::from_rgb(180, 195, 200) } else { egui::Color32::from_rgb(60, 70, 75) };
-                                                    plot_ui.text(Text::new(format!("LapLabelMarker_{}", lap_num), PlotPoint::new(center, 99.0), egui::RichText::new(label_str).color(label_txt_color).size(10.0).strong()));
-                                                }
-                                            }
-
-                                            // 7. Draw Locked Playback Cursor timeline
-                                            if let Some(cx) = self.cursor_x {
-                                                plot_ui.vline(VLine::new("Cursor Line", cx).color(ACCENT_COLOR).width(1.5));
-                                                let idx = get_closest_index(&self.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
-                                                
-                                                let scaled_val_speed = self.speed_pts_cache[idx][1];
-                                                let scaled_val_rpm = self.rpm_pts_cache[idx][1];
-                                                let scaled_val_thr = self.throttle_pts_cache[idx][1];
-                                                let scaled_val_brk = self.brake_pts_cache[idx][1];
-                                                let scaled_val_steer = self.steering_pts_cache[idx][1];
-
-                                                plot_ui.points(Points::new("Cursor Speed", PlotPoints::from(vec![[cx, scaled_val_speed]])).color(SPEED_COLOR).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor RPM", PlotPoints::from(vec![[cx, scaled_val_rpm]])).color(egui::Color32::from_rgb(241, 196, 15)).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor Thr", PlotPoints::from(vec![[cx, scaled_val_thr]])).color(egui::Color32::from_rgb(46, 204, 113)).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor Brk", PlotPoints::from(vec![[cx, scaled_val_brk]])).color(egui::Color32::from_rgb(231, 76, 60)).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor Steer", PlotPoints::from(vec![[cx, scaled_val_steer]])).color(SUB_ACCENT_COLOR).radius(5.0));
-                                                plot_ui.points(Points::new("Stamp Ticker", PlotPoints::from(vec![[cx, 4.75]])).color(ACCENT_COLOR).shape(egui_plot::MarkerShape::Up).radius(10.0));
-                                            }
-
-                                            // 8. Highlight Zoom State
-                                            if self.is_highlight_active {
-                                                if let Some(x_start) = self.highlight_start {
-                                                    let current_x = plot_ui.pointer_coordinate().map(|p| p.x.clamp(0.0, max_time)).unwrap_or_else(|| self.cursor_x.unwrap_or(0.0));
-                                                    let start = f64::min(x_start, current_x);
-                                                    let end = f64::max(x_start, current_x);
-                                                    plot_ui.span(Span::new("Zoom Highlight", start..=end).axis(Axis::X).fill(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 32)).border_width(1.0).border_color(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 120)));
-                                                }
-                                            }
-
-                                            // 9. Time Ticker zone dragging detector
-                                            if plot_ui.ctx().input(|i| i.pointer.any_pressed()) {
-                                                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                                                    self.is_dragging_ticker = pointer_pos.y < 9.5;
-                                                }
-                                            }
-
-                                            // 10. Dragging / Panning / Scrubbing
-                                            if is_left_click_down {
-                                                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                                                    let click_pos = pointer_pos.x.clamp(0.0, max_time);
-                                                    if self.is_highlight_active {
-                                                        if !plot_ui.response().double_clicked() {
-                                                            if let Some(x_start) = self.highlight_start {
-                                                                let zoom_min = f64::min(x_start, click_pos);
-                                                                let zoom_max = f64::max(x_start, click_pos);
-                                                                if (zoom_max - zoom_min).abs() > 0.1 {
-                                                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
-                                                                    self.cursor_x = Some(zoom_min);
-                                                                }
-                                                                self.is_highlight_active = false;
-                                                                self.highlight_start = None;
-                                                            }
-                                                        }
-                                                    } else if self.is_dragging_ticker {
-                                                        let pixel_delta_x = plot_ui.ctx().input(|i| i.pointer.delta().x);
-                                                        let plot_width_pixels = plot_ui.response().rect.width();
-                                                        let pixels_per_second = (plot_width_pixels as f64) / visible_width;
-                                                        let seconds_delta = (pixel_delta_x as f64) / pixels_per_second;
-                                                        let new_min = (min_visible_x - seconds_delta).clamp(0.0, max_time - visible_width);
-                                                        let new_max = new_min + visible_width;
-                                                        plot_ui.set_plot_bounds_x(new_min..=new_max);
-                                                    } else {
-                                                        self.cursor_x = Some(click_pos);
-                                                    }
-                                                }
-                                            }
-
-                                            // 11. Zooming Wheel
-                                            if !is_left_click_down {
-                                                let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
-                                                if scroll.y.abs() > 1.5 {
-                                                    let is_zooming_in = scroll.y > 0.0;
-                                                    let zoom_factor = if is_zooming_in { 0.925 } else { 1.075 };
-                                                    let mut target_width = visible_width * zoom_factor;
-                                                    target_width = target_width.clamp(1.5, max_time);
-                                                    let center = if is_zooming_in { self.cursor_x.unwrap_or((min_visible_x + max_visible_x) / 2.0) } else { (min_visible_x + max_visible_x) / 2.0 };
-                                                    let half_width = target_width / 2.0;
-                                                    let mut new_min = center - half_width;
-                                                    let mut mut_new_max = center + half_width;
-                                                    if new_min < 0.0 {
-                                                        let overflow = 0.0 - new_min;
-                                                        new_min = 0.0;
-                                                        mut_new_max = (mut_new_max + overflow).min(max_time);
-                                                    } else if mut_new_max > max_time {
-                                                        let overflow = mut_new_max - max_time;
-                                                        mut_new_max = max_time;
-                                                        new_min = (new_min - overflow).max(0.0);
-                                                    }
-                                                    if new_min < mut_new_max {
-                                                        plot_ui.set_plot_bounds_x(new_min..=mut_new_max);
-                                                    }
-                                                }
-                                            }
-                                        });
+                                        self.draw_motec_plot(ui, "basic_worksheet_canvas", WorksheetTab::Basic, is_tab_switch);
                                     }
                                     WorksheetTab::DynamicRake => {
-                                        // 3. Extract exact unscaled physical values from session using locked cursor index!
-                                        let mut raw_val_front = 0.0;
-                                        let mut raw_val_rear = 0.0;
-                                        let mut raw_val_rake = 0.0;
-                                        let mut raw_val_speed = 0.0;
-
-                                        if let Some(ref mut cx) = self.cursor_x {
-                                            // Clamp the locked cursor position strictly to the plotted data bounds
-                                            *cx = cx.clamp(0.0, max_time);
-                                            
-                                            // Binary search relative time in our precomputed points cache [0.0 to stint duration]
-                                            let idx = match self.front_pts_cache.binary_search_by(|p| p[0].partial_cmp(cx).unwrap_or(std::cmp::Ordering::Equal)) {
-                                                Ok(i) => i,
-                                                Err(i) => {
-                                                    if i >= self.front_pts_cache.len() {
-                                                        self.front_pts_cache.len().saturating_sub(1)
-                                                    } else {
-                                                        i
-                                                    }
-                                                }
-                                            };
-
-                                            if let Some(session) = &self.session {
-                                                if idx < session.front_smooth.len() {
-                                                    // Convert to millimeters cleanly from physical arrays
-                                                    let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
-                                                    raw_val_front = session.front_smooth[idx] * scale;
-                                                    raw_val_rear = session.rear_smooth[idx] * scale;
-                                                    raw_val_rake = session.rake[idx] * scale;
-                                                    
-                                                    // Speed column lookup (Convert to km/h)
-                                                    let speed_col = session.dataframe.column("Speed").unwrap().f64().unwrap();
-                                                    raw_val_speed = speed_col.get(idx).unwrap_or(0.0) * 3.6;
-                                                }
-                                            }
-                                        }
-
-                                        ui.horizontal(|ui| {
-                                            // Dynamic Locked Values HUD inside graph headers (MoTeC style!)
-                                            if let Some(cx) = self.cursor_x {
-                                                ui.colored_label(ACCENT_COLOR, format!("⏱  PLAYBACK @ {}", format_lap_time(cx)));
-                                                ui.separator();
-                                                ui.colored_label(SPEED_COLOR, format!("Ground Speed: {:.1} km/h", raw_val_speed));
-                                                ui.separator();
-                                                ui.colored_label(SUB_ACCENT_COLOR, format!("Front RH: {:.2}mm", raw_val_front));
-                                                ui.colored_label(egui::Color32::from_rgb(255, 20, 147), format!("Rear RH: {:.2}mm", raw_val_rear));
-                                                ui.colored_label(ACCENT_COLOR, format!("Rake: {:.2}mm", raw_val_rake));
-                                            }
-                                        });
-                                        ui.add_space(4.0);
-
-                                        plot.show(ui, |plot_ui| {
-                                            // Trigger external Reset Zoom button or first-load bounds initialization (Zoom to currently selected lap range)
-                                            if self.reset_bounds_flag {
-                                                if let Some(sel_lap) = self.selected_lap {
-                                                    if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == sel_lap) {
-                                                        let (_, start_t, _end_t) = self.lap_ranges[pos];
-                                                        let end_time_focus = if pos + 1 < self.lap_ranges.len() {
-                                                            self.lap_ranges[pos + 1].1
-                                                        } else {
-                                                            max_time
-                                                        };
-                                                        plot_ui.set_plot_bounds_x(start_t..=end_time_focus);
-                                                    } else {
-                                                        plot_ui.set_plot_bounds_x(0.0..=max_time);
-                                                    }
-                                                } else {
-                                                    plot_ui.set_plot_bounds_x(0.0..=max_time);
-                                                }
-                                                self.reset_bounds_flag = false;
-                                            }
-
-                                            // Retrieve active screen bounds to process interactive drag scrubbing & edge panning!
-                                            let active_bounds = plot_ui.plot_bounds();
-                                            let min_visible_x = active_bounds.min()[0];
-                                            let max_visible_x = active_bounds.max()[0];
-                                            let visible_width = max_visible_x - min_visible_x;
-
-                                            // --- HIGH-PERFORMANCE DYNAMIC VIEWPORT DECIMATION / STRIDING ---
-                                            // Binary search the exact bounds range in O(log N) time and extract visible points!
-                                            // Cops heap-allocations down to virtually zero, restoring buttery-smooth 300+ FPS!
-                                            let decimate_points = |cache: &Vec<[f64; 2]>| -> PlotPoints {
-                                                if cache.is_empty() { return PlotPoints::default(); }
-                                                
-                                                let start_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&min_visible_x).unwrap_or(std::cmp::Ordering::Equal)) {
-                                                    Ok(idx) => idx,
-                                                    Err(idx) => idx,
-                                                }.saturating_sub(1);
-                                                
-                                                let end_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&max_visible_x).unwrap_or(std::cmp::Ordering::Equal)) {
-                                                    Ok(idx) => idx,
-                                                    Err(idx) => idx,
-                                                }.min(cache.len());
-                                                
-                                                let slice = &cache[start_idx..end_idx];
-                                                let m = slice.len();
-                                                if m <= 2000 {
-                                                    slice.to_vec().into()
-                                                } else {
-                                                    let stride = m / 2000;
-                                                    let mut downsampled = Vec::with_capacity(2002);
-                                                    downsampled.push(slice[0]);
-                                                    let mut idx = 1;
-                                                    while idx < m - 1 {
-                                                        downsampled.push(slice[idx]);
-                                                        idx += stride;
-                                                    }
-                                                    downsampled.push(slice[m - 1]);
-                                                    downsampled.into()
-                                                }
-                                            };
-
-                                            let front_dec_pts = decimate_points(&self.front_pts_cache);
-                                            let rear_dec_pts = decimate_points(&self.rear_pts_cache);
-                                            let rake_dec_pts = decimate_points(&self.rake_pts_cache);
-                                            let speed_dec_pts = decimate_points(&self.speed_pts_cache);
-
-                                            // 1. Draw Axis Dividers separating our lanes cleanly
-                                            let div_color = if is_dark { egui::Color32::from_rgb(25, 30, 32) } else { egui::Color32::from_rgb(205, 204, 203) };
-                                            plot_ui.hline(HLine::new("Top Lane Divider", 68.0).color(div_color).width(1.0));
-                                            plot_ui.hline(HLine::new("Middle Lane Divider", 38.0).color(div_color).width(1.0));
-                                            plot_ui.hline(HLine::new("Bottom Ticker Divider", 9.5).color(div_color).width(1.0));
-
-                                            // 2. Draw our Sleek Interactive Dark Ticker timeline background bar!
-                                            let track_color = if is_dark { egui::Color32::from_rgb(12, 18, 20) } else { egui::Color32::from_rgb(215, 214, 213) };
-                                            plot_ui.hline(HLine::new("Timeline Track", 4.75).color(track_color).width(9.5));
-
-                                            // 3. Draw Stacked Decimated Curves (Guarantees silky-smooth vertex rendering!)
-                                            // Lane 1 (Ground Speed - Calm Sky Blue): [70.0, 98.0]
-                                            plot_ui.line(Line::new("Ground Speed (km/h)", speed_dec_pts).color(SPEED_COLOR).width(2.2));
-                                            
-                                            // Lane 2 (Axle Heights): [40.0, 66.0]
-                                            plot_ui.line(Line::new("Front Ride Height (4.5s Smoothed)", front_dec_pts).color(SUB_ACCENT_COLOR).width(2.2));
-                                            plot_ui.line(Line::new("Rear Ride Height (4.5s Smoothed)", rear_dec_pts).color(egui::Color32::from_rgb(255, 20, 147)).width(2.2));
-                                            
-                                            // Lane 3 (Dynamic Rake): [12.0, 36.0]
-                                            plot_ui.line(Line::new("Dynamic Rake (mm)", rake_dec_pts).color(ACCENT_COLOR).width(2.2));
-
-                                            // --- DYNAMIC MOTEC MULTI-LAP REFERENCE OVERLAYS (All 3 Channels!) ---
-                                            // A. Bright Cyan Overlay Reference Lap (Overlaid on EVERY visible lap section in the stint!)
-                                            if let Some(ref_lap_num) = self.ref_lap_cyan {
-                                                let ref_start = self.lap_ranges.iter()
-                                                    .find(|r| r.0 == ref_lap_num)
-                                                    .map(|r| r.1)
-                                                    .unwrap_or(0.0);
-                                                
-                                                let slice_front = self.get_lap_points_slice(&self.front_pts_cache, ref_lap_num);
-                                                let slice_rear = self.get_lap_points_slice(&self.rear_pts_cache, ref_lap_num);
-                                                let slice_rake = self.get_lap_points_slice(&self.rake_pts_cache, ref_lap_num);
-                                                let slice_speed = self.get_lap_points_slice(&self.speed_pts_cache, ref_lap_num);
-
-                                                if !slice_front.is_empty() {
-                                                    // Loop over every visible lap configuration in the stint and project the reference layout
-                                                    for &(lap_num, start_t, end_t) in &self.lap_ranges {
-                                                        if end_t >= min_visible_x && start_t <= max_visible_x {
-                                                            let offset = start_t - ref_start;
-                                                            
-                                                            let shifted_front: Vec<[f64; 2]> = slice_front.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                                            let shifted_rear: Vec<[f64; 2]> = slice_rear.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                                            let shifted_rake: Vec<[f64; 2]> = slice_rake.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                                            let shifted_speed: Vec<[f64; 2]> = slice_speed.iter().map(|p| [p[0] + offset, p[1]]).collect();
-
-                                                            let dec_front = decimate_points(&shifted_front);
-                                                            let dec_rear = decimate_points(&shifted_rear);
-                                                            let dec_rake = decimate_points(&shifted_rake);
-                                                            let dec_speed = decimate_points(&shifted_speed);
-
-                                                            // Draw comparison lines in bright Cyan (#00FFFF) slightly thinner (width 1.2) for perfect contrast
-                                                            plot_ui.line(Line::new(format!("Speed Cyan Ref Lap{}", lap_num), dec_speed).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Front Cyan Ref Lap{}", lap_num), dec_front).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Rear Cyan Ref Lap{}", lap_num), dec_rear).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Rake Cyan Ref Lap{}", lap_num), dec_rake).color(egui::Color32::from_rgb(0, 255, 255)).width(1.2));
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // B. Pure White Overlay Reference Lap (Overlaid on EVERY visible lap section in the stint!)
-                                            if let Some(ref_lap_num) = self.ref_lap_white {
-                                                let ref_start = self.lap_ranges.iter()
-                                                    .find(|r| r.0 == ref_lap_num)
-                                                    .map(|r| r.1)
-                                                    .unwrap_or(0.0);
-                                                
-                                                let slice_front = self.get_lap_points_slice(&self.front_pts_cache, ref_lap_num);
-                                                let slice_rear = self.get_lap_points_slice(&self.rear_pts_cache, ref_lap_num);
-                                                let slice_rake = self.get_lap_points_slice(&self.rake_pts_cache, ref_lap_num);
-                                                let slice_speed = self.get_lap_points_slice(&self.speed_pts_cache, ref_lap_num);
-
-                                                if !slice_front.is_empty() {
-                                                    // Loop over every visible lap configuration in the stint and project the reference layout
-                                                    for &(lap_num, start_t, end_t) in &self.lap_ranges {
-                                                        if end_t >= min_visible_x && start_t <= max_visible_x {
-                                                            let offset = start_t - ref_start;
-                                                            
-                                                            let shifted_front: Vec<[f64; 2]> = slice_front.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                                            let shifted_rear: Vec<[f64; 2]> = slice_rear.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                                            let shifted_rake: Vec<[f64; 2]> = slice_rake.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                                            let shifted_speed: Vec<[f64; 2]> = slice_speed.iter().map(|p| [p[0] + offset, p[1]]).collect();
-
-                                                            let dec_front = decimate_points(&shifted_front);
-                                                            let dec_rear = decimate_points(&shifted_rear);
-                                                            let dec_rake = decimate_points(&shifted_rake);
-                                                            let dec_speed = decimate_points(&shifted_speed);
-
-                                                            // Draw comparison lines in pure White slightly thinner (width 1.2) for perfect contrast
-                                                            plot_ui.line(Line::new(format!("Speed White Ref Lap{}", lap_num), dec_speed).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Front White Ref Lap{}", lap_num), dec_front).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Rear White Ref Lap{}", lap_num), dec_rear).color(egui::Color32::WHITE).width(1.2));
-                                                            plot_ui.line(Line::new(format!("Rake White Ref Lap{}", lap_num), dec_rake).color(egui::Color32::WHITE).width(1.2));
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // 4. Draw thin red dotted column lines flagging LAP BOUNDARY SEPARATIONS (MoTeC Style!)
-                                            for &lap_start_time in &self.lap_markers {
-                                                if lap_start_time > 0.0 {
-                                                    plot_ui.vline(VLine::new(format!("LapSeparator_{}", lap_start_time), lap_start_time)
-                                                        .color(egui::Color32::from_rgba_unmultiplied(220, 20, 60, 120)) // Slate Red, translucent
-                                                        .style(egui_plot::LineStyle::dotted_dense())
-                                                        .width(1.0)
-                                                    );
-                                                }
-                                            }
-
-                                            // 5. Draw Custom Symmetrical Time Stamp Tickers & Labels Inside the Interactive Timeline Track!
-                                            // Determine optimal tick step sizes dynamically based on zoom horizontal viewport widths
-                                            let step = if visible_width > 240.0 {
-                                                60.0
-                                            } else if visible_width > 120.0 {
-                                                30.0
-                                            } else if visible_width > 60.0 {
-                                                15.0
-                                            } else if visible_width > 30.0 {
-                                                10.0
-                                            } else if visible_width > 15.0 {
-                                                5.0
-                                            } else if visible_width > 5.0 {
-                                                2.0
-                                            } else {
-                                                0.5
-                                            };
-
-                                            let start_tick = (min_visible_x / step).floor() * step;
-                                            let end_tick = (max_visible_x / step).ceil() * step;
-
-                                            let mut current_tick = start_tick;
-                                            while current_tick <= end_tick {
-                                                if current_tick >= 0.0 && current_tick <= max_time {
-                                                    // Draw Tick vertical line inside the track
-                                                    let tick_line_color = if is_dark { egui::Color32::from_rgb(28, 38, 41) } else { egui::Color32::from_rgb(180, 179, 178) };
-                                                    plot_ui.vline(VLine::new(format!("TickLine_{}", current_tick), current_tick)
-                                                        .color(tick_line_color)
-                                                        .width(1.0)
-                                                    );
-
-                                                    // Format & render custom timestamp labels perfectly centered inside track
-                                                    let label_str = format_lap_time(current_tick);
-                                                    let display_text = label_str.get(3..8).unwrap_or("00:00"); // formats to MM:SS
-                                                    let text_color = if is_dark { egui::Color32::from_rgb(12, 18, 20) } else { egui::Color32::from_rgb(80, 80, 80) };
-                                                    plot_ui.text(Text::new(
-                                                        format!("TickLabel_{}", current_tick),
-                                                        PlotPoint::new(current_tick, 4.75),
-                                                        egui::RichText::new(display_text).color(text_color).size(9.0)
-                                                    ));
-                                                }
-                                                current_tick += step;
-                                            }
-
-                                            // 6. Draw Elegant Lap Label Markers Just Above the Graph (Right Under Tooltips)
-                                            // Placed centered above each lap's respective boundary section at Y = 99.0
-                                            for (lap_idx, &(lap_num, start_t, end_t)) in self.lap_ranges.iter().enumerate() {
-                                                if end_t >= min_visible_x && start_t <= max_visible_x {
-                                                    let center = (start_t + end_t) / 2.0;
-                                                    let label_str = if lap_idx == 0 {
-                                                        "Outlap".to_string()
-                                                    } else {
-                                                        format!("Lap {}", lap_idx)
-                                                    };
-                                                    
-                                                    // Render high-contrast lap labels centered in timeline track top edge
-                                                    let label_txt_color = if is_dark { egui::Color32::from_rgb(180, 195, 200) } else { egui::Color32::from_rgb(60, 70, 75) };
-                                                    plot_ui.text(Text::new(
-                                                        format!("LapLabelMarker_{}", lap_num),
-                                                        PlotPoint::new(center, 99.0),
-                                                        egui::RichText::new(label_str).color(label_txt_color).size(10.0).strong()
-                                                    ));
-                                                }
-                                            }
-
-                                            // 7. Draw Locked Playback Cursor timeline
-                                            if let Some(cx) = self.cursor_x {
-                                                plot_ui.vline(VLine::new("Cursor Line", cx).color(ACCENT_COLOR).width(1.5));
-                                                
-                                                // Find original index to scale the vertical intersection dots on the decimated view
-                                                let idx = get_closest_index(&self.front_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
-                                                
-                                                // Extract y positions at cursor index
-                                                let scaled_val_front = self.front_pts_cache[idx][1];
-                                                let scaled_val_rear = self.rear_pts_cache[idx][1];
-                                                let scaled_val_rake = self.rake_pts_cache[idx][1];
-                                                let scaled_val_speed = self.speed_pts_cache[idx][1];
-
-                                                // Draw intersection dots mapped directly to pre-scaled heights for all 3 Lanes!
-                                                plot_ui.points(Points::new("Cursor Speed", PlotPoints::from(vec![[cx, scaled_val_speed]])).color(SPEED_COLOR).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor Front", PlotPoints::from(vec![[cx, scaled_val_front]])).color(SUB_ACCENT_COLOR).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor Rear", PlotPoints::from(vec![[cx, scaled_val_rear]])).color(egui::Color32::from_rgb(255, 20, 147)).radius(5.0));
-                                                plot_ui.points(Points::new("Cursor Rake", PlotPoints::from(vec![[cx, scaled_val_rake]])).color(ACCENT_COLOR).radius(5.0));
-
-                                                // Draw Glowing orange Cursor Slider stamp ticker on the bottom timeline track!
-                                                plot_ui.points(Points::new("Stamp Ticker", PlotPoints::from(vec![[cx, 4.75]]))
-                                                    .color(ACCENT_COLOR)
-                                                    .shape(egui_plot::MarkerShape::Up)
-                                                    .radius(10.0)
-                                                );
-                                            }
-
-                                            // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
-                                            if plot_ui.response().double_clicked() {
-                                                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                                                    self.highlight_start = Some(pointer_pos.x.clamp(0.0, max_time));
-                                                    self.cursor_x = Some(pointer_pos.x.clamp(0.0, max_time));
-                                                    self.is_highlight_active = true;
-                                                }
-                                            }
-
-                                            // Render custom translucent orange horizontal band (huge vertical column stem) if highlight selection is active!
-                                            if self.is_highlight_active {
-                                                if let Some(x_start) = self.highlight_start {
-                                                    // Track the user's cursor horizontally in real-time
-                                                    let current_x = plot_ui.pointer_coordinate()
-                                                        .map(|p| p.x.clamp(0.0, max_time))
-                                                        .unwrap_or_else(|| self.cursor_x.unwrap_or(0.0));
-
-                                                    let start = f64::min(x_start, current_x);
-                                                    let end = f64::max(x_start, current_x);
-
-                                                    // Pulls translucent overlay parameters directly from ACCENT_COLOR
-                                                    let fill_alpha = egui::Color32::from_rgba_unmultiplied(242, 82, 37, 32);
-                                                    let border_alpha = egui::Color32::from_rgba_unmultiplied(242, 82, 37, 120);
-
-                                                    plot_ui.span(Span::new("Zoom Highlight", start..=end)
-                                                        .axis(Axis::X)
-                                                        .fill(fill_alpha)
-                                                        .border_width(1.0)
-                                                        .border_color(border_alpha)
-                                                    );
-                                                }
-                                            }
-
-                                            // --- DETECT DRAG START ZONE (IN COORDINATE SPACE!) ---
-                                            // Because the custom track sits perfectly inside Y = [0.0, 9.5], coordinates are ALWAYS Some!
-                                            // Clicking on the timeline is 100% guaranteed to be detected without click-through failures!
-                                            if plot_ui.ctx().input(|i| i.pointer.any_pressed()) {
-                                                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                                                    self.is_dragging_ticker = pointer_pos.y < 9.5;
-                                                }
-                                            }
-
-                                            // --- INTERACTIVE DRAGGING / SCRUBBING / TIME-TICKER PANNING ---
-                                            let is_left_click_down = plot_ui.ctx().input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-                                            if is_left_click_down {
-                                                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                                                    let click_pos = pointer_pos.x.clamp(0.0, max_time);
-
-                                                    if self.is_highlight_active {
-                                                        // --- MOTEC STYLE CLICK-TO-FINALIZE ZOOM ---
-                                                        // If highlight mode is active, the very next left-click zooms strictly on the highlighted envelope!
-                                                        // To prevent instant-closes on the double click event, ensure double_clicked is FALSE
-                                                        if !plot_ui.response().double_clicked() {
-                                                            if let Some(x_start) = self.highlight_start {
-                                                                let zoom_min = f64::min(x_start, click_pos);
-                                                                let zoom_max = f64::max(x_start, click_pos);
-                                                                
-                                                                if (zoom_max - zoom_min).abs() > 0.1 {
-                                                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
-                                                                    self.cursor_x = Some(zoom_min); // Snap cursor strictly to start of highlighted section!
-                                                                }
-                                                                self.is_highlight_active = false;
-                                                                self.highlight_start = None;
-                                                            }
-                                                        }
-                                                    } else if self.is_dragging_ticker {
-                                                        // --- MOTEC SLIDING / PANNING MECHANICS ---
-                                                        // Dragging on our custom bottom timeline track slides (pans) the visible viewport horizontally left or right!
-                                                        let pixel_delta_x = plot_ui.ctx().input(|i| i.pointer.delta().x);
-                                                        let plot_width_pixels = plot_ui.response().rect.width();
-                                                        let pixels_per_second = (plot_width_pixels as f64) / visible_width;
-                                                        let seconds_delta = (pixel_delta_x as f64) / pixels_per_second;
-
-                                                        let new_min = (min_visible_x - seconds_delta).clamp(0.0, max_time - visible_width);
-                                                        let new_max = new_min + visible_width;
-                                                        plot_ui.set_plot_bounds_x(new_min..=new_max);
-                                                    } else {
-                                                        // Dragging inside the graph scrubs the playback cursor normally!
-                                                        self.cursor_x = Some(click_pos);
-                                                    }
-                                                }
-                                            }
-
-                                            // --- SCROLL WHEEL HIGH-PRECISION HORIZONTAL ZOOMING ---
-                                            // Holding zoom centered perfectly on your cursor, completely immune to touchpad loops!
-                                            // Disabled strictly when left click is down to avoid any visual jumps during scrubbing dragging!
-                                            if !is_left_click_down {
-                                                let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
-                                                if scroll.y.abs() > 1.5 {
-                                                    let is_zooming_in = scroll.y > 0.0;
-                                                    
-                                                    // Slowed down zoom speed per click tick by exactly 25% (from 10% adjustments to 7.5% adjustments!)
-                                                    let zoom_factor = if is_zooming_in { 0.925 } else { 1.075 };
-
-                                                    // Enforce precision zoom window limits [min_width = 1.5s, max_width = max_time]
-                                                    let mut target_width = visible_width * zoom_factor;
-                                                    target_width = target_width.clamp(1.5, max_time);
-
-                                                    // Zoom IN -> Center on locked playback cursor (cursor_x)
-                                                    // Zoom OUT -> Dock towards center of the visible graph symmetrically to prevent line drift!
-                                                    let center = if is_zooming_in {
-                                                        self.cursor_x.unwrap_or((min_visible_x + max_visible_x) / 2.0)
-                                                    } else {
-                                                        (min_visible_x + max_visible_x) / 2.0
-                                                    };
-
-                                                    let half_width = target_width / 2.0;
-                                                    let mut new_min = center - half_width;
-                                                    let mut mut_new_max = center + half_width;
-
-                                                    // Symmetrical Boundary Overflow Shifting (Completely resolves disappeared-graph boundary drift!)
-                                                    if new_min < 0.0 {
-                                                        let overflow = 0.0 - new_min;
-                                                        new_min = 0.0;
-                                                        mut_new_max = (mut_new_max + overflow).min(max_time);
-                                                    } else if mut_new_max > max_time {
-                                                        let overflow = mut_new_max - max_time;
-                                                        mut_new_max = max_time;
-                                                        new_min = (new_min - overflow).max(0.0);
-                                                    }
-
-                                                    if new_min < mut_new_max {
-                                                        plot_ui.set_plot_bounds_x(new_min..=mut_new_max);
-                                                    }
-                                                }
-                                            }
-                                        });
+                                        self.draw_motec_plot(ui, "rake_worksheet_canvas", WorksheetTab::DynamicRake, is_tab_switch);
                                     }
                                     _ => {
                                         // Placeholder for other tabs standing by
@@ -1813,6 +1974,138 @@ impl eframe::App for OpenDavApp {
                                 }
                             }
                         }
+                        ActivePage::Reports => {
+                            if !self.session_loaded || self.session.is_none() {
+                                ui.centered_and_justified(|ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.label(egui::RichText::new("Awaiting Telemetry Stream").heading().color(SUB_ACCENT_COLOR));
+                                        ui.label(egui::RichText::new("Please load an iRacing .ibt file from the top taskbar to view reports.").color(egui::Color32::GRAY));
+                                    });
+                                });
+                            } else {
+                                let session_ref = self.session.as_ref().unwrap();
+                                let venue = session_ref.venue.clone();
+
+                                ui.horizontal(|ui| {
+                                    ui.heading(egui::RichText::new("Sector Analysis Report").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.label(egui::RichText::new(venue.to_uppercase()).strong().color(ACCENT_COLOR));
+                                    });
+                                });
+                                ui.add_space(10.0);
+                                ui.separator();
+                                ui.add_space(10.0);
+
+                                if self.lap_data_cache.is_empty() || self.sectors.is_empty() {
+                                    ui.label("No sector or lap data available for report.");
+                                } else {
+                                    ui.columns(2, |cols| {
+                                        cols[0].vertical(|ui| {
+                                            let mut visible_laps: Vec<&LapData> = self.lap_data_cache.iter()
+                                                .filter(|lap| lap.lap_num > 3)
+                                                .collect();
+                                            if visible_laps.is_empty() {
+                                                visible_laps = self.lap_data_cache.iter().collect();
+                                            }
+
+                                            let best_total_time = visible_laps.iter()
+                                                .map(|lap| lap.time.last().copied().unwrap_or(0.0))
+                                                .filter(|&t| t > 0.0)
+                                                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                                                .unwrap_or(0.0);
+
+                                            egui::ScrollArea::both()
+                                                .id_source("sector_report_scroll")
+                                                .show(ui, |ui| {
+                                                    egui::Grid::new("sector_report_grid")
+                                                        .striped(true)
+                                                        .min_col_width(85.0)
+                                                        .spacing([20.0, 12.0])
+                                                        .show(ui, |ui| {
+                                                            // Header Row
+                                                            ui.label(egui::RichText::new("Sector / Corner").strong());
+                                                            for lap in &visible_laps {
+                                                                ui.label(egui::RichText::new(format!("Lap {}", lap.lap_num)).strong());
+                                                            }
+                                                            ui.label(egui::RichText::new("Optimal").strong().color(ACCENT_COLOR));
+                                                            ui.end_row();
+
+                                                            // Sector split rows
+                                                            for (s_idx, sector) in self.sectors.iter().enumerate() {
+                                                                ui.label(egui::RichText::new(&sector.name).strong());
+
+                                                                let best_s_time = self.sector_bests.get(s_idx).copied().unwrap_or(0.0);
+
+                                                                for lap in &visible_laps {
+                                                                    let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
+                                                                    let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
+                                                                    let s_time = t_end - t_start;
+
+                                                                    let is_session_best = s_time > 0.0 && (s_time - best_s_time).abs() < 1e-4;
+                                                                    let is_near_best = s_time > 0.0 && s_time <= best_s_time * 1.015;
+
+                                                                    let cell_color = if is_session_best {
+                                                                        if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) }
+                                                                    } else if is_near_best {
+                                                                        if is_dark { egui::Color32::from_rgb(120, 220, 120) } else { egui::Color32::from_rgb(34, 112, 34) }
+                                                                    } else {
+                                                                        if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }
+                                                                    };
+
+                                                                    let mut text = egui::RichText::new(format_sector_time(s_time)).color(cell_color);
+                                                                    if is_session_best || is_near_best {
+                                                                        text = text.strong();
+                                                                    }
+                                                                    ui.label(text);
+                                                                }
+
+                                                                let opt_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
+                                                                ui.label(egui::RichText::new(format_sector_time(best_s_time)).color(opt_color).strong());
+                                                                ui.end_row();
+                                                            }
+
+                                                            // Totals Row
+                                                            ui.label(egui::RichText::new("TOTAL").strong().color(ACCENT_COLOR));
+                                                            for lap in &visible_laps {
+                                                                let total_time = lap.time.last().copied().unwrap_or(0.0);
+
+                                                                let is_total_best = total_time > 0.0 && (total_time - best_total_time).abs() < 1e-4;
+                                                                let is_total_near_best = total_time > 0.0 && total_time <= best_total_time * 1.015;
+
+                                                                let total_color = if is_total_best {
+                                                                    if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) }
+                                                                } else if is_total_near_best {
+                                                                    if is_dark { egui::Color32::from_rgb(120, 220, 120) } else { egui::Color32::from_rgb(34, 112, 34) }
+                                                                } else {
+                                                                    if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                                                                };
+
+                                                                let mut text = egui::RichText::new(format_lap_time(total_time)).color(total_color);
+                                                                if is_total_best || is_total_near_best {
+                                                                    text = text.strong();
+                                                                }
+                                                                ui.label(text);
+                                                            }
+
+                                                            let optimal_total = self.sector_bests.iter().sum::<f64>();
+                                                            let opt_total_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
+                                                            ui.label(egui::RichText::new(format_lap_time(optimal_total)).color(opt_total_color).strong());
+                                                            ui.end_row();
+                                                        });
+                                                });
+                                        });
+
+                                        cols[1].vertical(|ui| {
+                                            ui.heading(egui::RichText::new("Track Layout Map").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                                            ui.add_space(8.0);
+                                            ui.group(|ui| {
+                                                self.draw_interactive_track_map(ui, 450.0);
+                                            });
+                                        });
+                                    });
+                                }
+                            }
+                        }
                     }
                 });
             }
@@ -1822,9 +2115,168 @@ impl eframe::App for OpenDavApp {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 }
 
-fn height_offset(ui: &egui::Ui) -> f32 {
-    let screen_height = ui.ctx().screen_rect().height();
-    screen_height / 2.0
+impl OpenDavApp {
+    fn draw_interactive_track_map(&self, ui: &mut egui::Ui, height: f32) {
+        if self.lap_data_cache.is_empty() {
+            ui.label("No track map coordinates precomputed.");
+            return;
+        }
+
+        let is_dark = ui.style().visuals.dark_mode;
+        let active_lap_num = self.selected_lap.unwrap_or_else(|| {
+            if let Some(session) = &self.session {
+                get_fastest_lap(&session.lap_times)
+            } else {
+                0
+            }
+        });
+
+        // Find the active lap data
+        let active_lap = self.lap_data_cache.iter().find(|l| l.lap_num == active_lap_num);
+        if active_lap.is_none() {
+            ui.label("Active lap data not found in cache.");
+            return;
+        }
+        let active_lap = active_lap.unwrap();
+
+        // Let's get the reference overlay laps if selected
+        let ref_cyan_lap = self.ref_lap_cyan.and_then(|num| self.lap_data_cache.iter().find(|l| l.lap_num == num));
+        let ref_white_lap = self.ref_lap_white.and_then(|num| self.lap_data_cache.iter().find(|l| l.lap_num == num));
+
+        // Initialize the egui_plot
+        let plot = Plot::new("interactive_track_map_plot")
+            .data_aspect(1.0) // Lock aspect ratio 1:1 to prevent coordinate stretching!
+            .height(height)
+            .show_axes(false)
+            .show_grid(false)
+            .legend(egui_plot::Legend::default())
+            .allow_zoom(true)
+            .allow_drag(true);
+
+        plot.show(ui, |plot_ui| {
+            // 1. Draw Reference Laps (underneath)
+            if let Some(lap) = ref_cyan_lap {
+                let color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
+                let segments = get_lap_segments(lap);
+                for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
+                    plot_ui.line(Line::new(format!("Ref Lap {} (Cyan) - Seg {}", self.ref_lap_cyan.unwrap(), seg_idx), seg_pts)
+                        .color(color)
+                        .width(1.8)
+                    );
+                }
+            }
+
+            if let Some(lap) = ref_white_lap {
+                let color = if is_dark { egui::Color32::WHITE } else { egui::Color32::from_rgb(100, 100, 100) };
+                let segments = get_lap_segments(lap);
+                for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
+                    plot_ui.line(Line::new(format!("Ref Lap {} (White) - Seg {}", self.ref_lap_white.unwrap(), seg_idx), seg_pts)
+                        .color(color)
+                        .width(1.8)
+                    );
+                }
+            }
+
+            // 2. Draw Active Lap
+            let active_color = if is_dark { egui::Color32::from_rgb(255, 255, 255) } else { egui::Color32::from_rgb(10, 10, 10) };
+            let active_segments = get_lap_segments(active_lap);
+            for (seg_idx, seg_pts) in active_segments.into_iter().enumerate() {
+                plot_ui.line(Line::new(format!("Lap {} - Seg {}", active_lap_num, seg_idx), seg_pts)
+                    .color(active_color)
+                    .width(3.0)
+                );
+            }
+
+            // 3. Draw Start/Finish Line (perpendicular red tick at first coordinate)
+            if active_lap.x.len() > 1 {
+                let x0 = active_lap.x[0];
+                let y0 = active_lap.y[0];
+                let x1 = active_lap.x[1];
+                let y1 = active_lap.y[1];
+                
+                // Direction vector of the track at start/finish
+                let dx = x1 - x0;
+                let dy = y1 - y0;
+                let len = (dx*dx + dy*dy).sqrt();
+                if len > 0.0 {
+                    // Normal vector (perpendicular to direction)
+                    let nx = -dy / len;
+                    let ny = dx / len;
+                    
+                    // Draw a red line segment of length 16 meters centered on the S/F point
+                    let sf_width = 8.0;
+                    let sf_pts = vec![
+                        [x0 - nx * sf_width, y0 - ny * sf_width],
+                        [x0 + nx * sf_width, y0 + ny * sf_width],
+                    ];
+                    plot_ui.line(Line::new("Start/Finish Line", sf_pts)
+                        .color(egui::Color32::RED)
+                        .width(3.5)
+                    );
+                }
+            }
+
+            // 4. Draw Turn Labels at corner midpoints
+            for sector in &self.sectors {
+                if sector.name.starts_with("Turn") {
+                    let mid_dist = (sector.start_dist + sector.end_dist) / 2.0;
+                    let (tx, ty) = get_lap_coord_at_distance(active_lap, mid_dist);
+                    
+                    // Find normal vector at this midpoint to offset the label slightly outwards
+                    let mid_idx = match active_lap.dist.binary_search_by(|val| val.partial_cmp(&mid_dist).unwrap_or(std::cmp::Ordering::Equal)) {
+                        Ok(i) => i,
+                        Err(i) => i.clamp(0, active_lap.dist.len() - 1),
+                    };
+                    
+                    let mut nx = 0.0;
+                    let mut ny = 0.0;
+                    if mid_idx > 0 && mid_idx < active_lap.x.len() - 1 {
+                        let dx = active_lap.x[mid_idx + 1] - active_lap.x[mid_idx - 1];
+                        let dy = active_lap.y[mid_idx + 1] - active_lap.y[mid_idx - 1];
+                        let len = (dx*dx + dy*dy).sqrt();
+                        if len > 0.0 {
+                            nx = -dy / len;
+                            ny = dx / len;
+                        }
+                    }
+                    
+                    // Extract turn number string from name (e.g. "Turn 3" -> "3")
+                    let turn_num = sector.name.replace("Turn ", "");
+                    
+                    // Offset the text slightly by 15 meters along normal
+                    let offset_dist = 15.0;
+                    let label_x = tx + nx * offset_dist;
+                    let label_y = ty + ny * offset_dist;
+
+                    let label_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
+                    plot_ui.text(Text::new(
+                        &sector.name,
+                        PlotPoint::new(label_x, label_y),
+                        egui::RichText::new(turn_num).color(label_color)
+                    ));
+                }
+            }
+
+            // 5. Draw Live Car Playback Position Dot (locked to cursor_x)
+            if let Some(cx) = self.cursor_x {
+                let mut lap_rel_time = 0.0;
+                if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == active_lap_num) {
+                    let (_, start_t, end_t) = self.lap_ranges[pos];
+                    if cx >= start_t && cx <= end_t {
+                        lap_rel_time = cx - start_t;
+                    } else if cx > end_t {
+                        lap_rel_time = end_t - start_t;
+                    }
+                }
+
+                let (cx_x, cx_y) = get_lap_coord_at_time(active_lap, lap_rel_time);
+                plot_ui.points(Points::new("Current Position", vec![[cx_x, cx_y]])
+                    .color(ACCENT_COLOR)
+                    .radius(8.0)
+                );
+            }
+        });
+    }
 }
 
 fn main() -> eframe::Result<()> {

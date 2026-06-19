@@ -4,6 +4,7 @@ version = "3.0.0"
 edition = "2021"
 authors = ["Arturo <arturo@opendav.com>"]
 description = "High-performance virtual race engineering & telemetry workspace for iRacing"
+default-run = "opendav_rs"
 
 [dependencies]
 egui = "0.34.3"

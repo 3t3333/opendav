@@ -136,7 +136,7 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
             .trim_end_matches('\0')
             .to_string();
             
-        let unit_bytes = &var_buf[48..80];
+        let unit_bytes = &var_buf[112..144];
         let unit = String::from_utf8_lossy(unit_bytes)
             .trim_end_matches('\0')
             .to_string();
@@ -231,13 +231,21 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
 
     raw_lap_times.sort_by_key(|(lap_num, _)| *lap_num);
 
-    // Apply the 89% rule to filter out flunk/corrupt loops (e.g. 5s glitch laps)
-    let slowest_lap = raw_lap_times.iter().map(|(_, t)| *t).fold(0.0, f64::max);
-    let limit_time = slowest_lap * 0.89;
-
-    let lap_times: Vec<(i32, f64)> = raw_lap_times.into_iter()
-        .filter(|(_, t)| *t >= limit_time)
+    // Filter out short glitch laps (e.g. less than 10s) and keep valid laps.
+    // A lap is discarded as a glitch/reset if it is less than 75% of the median lap time.
+    let mut filtered_laps: Vec<(i32, f64)> = raw_lap_times.into_iter()
+        .filter(|(_, t)| *t >= 10.0)
         .collect();
+
+    if !filtered_laps.is_empty() {
+        let mut durations: Vec<f64> = filtered_laps.iter().map(|(_, t)| *t).collect();
+        durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_lap_time = durations[durations.len() / 2];
+        let limit_time = median_lap_time * 0.75;
+        filtered_laps.retain(|(_, t)| *t >= limit_time);
+    }
+
+    let lap_times = filtered_laps;
 
     // -------------------------------------------------------------------------
     // PRECOMPUTED DERIVED MATHEMATICS & SIGNAL FILTERS (Dynamic Rake, etc.)
