@@ -13,8 +13,6 @@
 !/src/
 !/assets/
 !/docs/
-/docs/*
-!/docs/RELEASE_NOTES_v0.1.0.md
 !/opendav_desktop/
 !/bin/
 
