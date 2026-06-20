@@ -198,10 +198,17 @@ fn detect_track_sectors(session: &ibt_parser::IbtSession, fastest_lap: i32) -> V
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ibt_path = Path::new(r"D:\Oldtelems\25s4Sebring\porsche992cup_sebring international 2025-11-28 11-57-29.ibt");
+    let args: Vec<String> = std::env::args().collect();
+    let ibt_path_str = if args.len() > 1 {
+        &args[1]
+    } else {
+        r"D:\Oldtelems\25s4Sebring\porsche992cup_sebring international 2025-11-28 11-57-29.ibt"
+    };
+    let ibt_path = Path::new(ibt_path_str);
     if !ibt_path.exists() {
         return Err(format!("Telemetry file not found: {}", ibt_path.display()).into());
     }
+
 
     println!("Parsing telemetry file: {} ...", ibt_path.display());
     let session = ibt_parser::parse_ibt_file(ibt_path)?;
@@ -388,7 +395,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     svg_content.push_str("</svg>\n");
 
-    let dest_path = Path::new("sebring_vector_branding.svg");
+    let dest_path_str = if args.len() > 2 {
+        &args[2]
+    } else {
+        "sebring_vector_branding.svg"
+    };
+    let dest_path = Path::new(dest_path_str);
     let mut file = File::create(&dest_path)?;
     file.write_all(svg_content.as_bytes())?;
     println!("Successfully exported branding vector SVG to: {}", dest_path.display());
