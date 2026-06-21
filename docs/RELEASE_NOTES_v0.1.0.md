@@ -1,30 +1,36 @@
-# OpenDAV v0.1.0-rs Release Notes
+# OpenDAV v0.1.0
+<img width="1200" height="400" alt="Untitled - June 18, 2026 at 23 59 55-1" src="https://github.com/user-attachments/assets/bb317e43-8f47-4222-88eb-d2955ffb2765" />
 
-OpenDav (0.1.0-rs), is an open performance centered telemetry analysis workspace built natively in Rust. This release lays the foundation for high-performance telemetry ingestion, interactive graphing, dynamic spatial visualization, and sector analysis.
+OpenDav is an open, performance centered telemetry analysis workspace built natively in Rust. This release lays the foundation for high-performance telemetry ingestion, interactive graphing, dynamic spatial visualization, and sector analysis.
 
----
+
 
 ## Technical Highlights & Core Features
 
 ### 1. GPS-Derived 2D Vector Track Map
 * **Coordinate Projection**: Automatically projects raw spherical latitude and longitude telemetry points to a local Cartesian plane in meters relative to the lap start coordinate:
-  \[
-  x_i = R \cdot (\text{Lon}_i - \text{Lon}_0) \cdot \frac{\pi}{180} \cdot \cos\left(\text{Lat}_0 \cdot \frac{\pi}{180}\right)
-  \]
-  \[
-  y_i = R \cdot (\text{Lat}_i - \text{Lat}_0) \cdot \frac{\pi}{180}
-  \]
+
+$$
+x_i = R \cdot (\text{Lon}_i - \text{Lon}_0) \cdot \frac{\pi}{180} \cdot \cos\left(\text{Lat}_0 \cdot \frac{\pi}{180}\right)
+$$
+
+$$
+y_i = R \cdot (\text{Lat}_i - \text{Lat}_0) \cdot \frac{\pi}{180}
+$$
 * **Dynamic Segments**: Renders the active driven lap path outline as a bold line (`3.0` width).
 * **Coordinate Jump Handling**: Automatically splits rendering paths if the spatial distance between consecutive points exceeds 50 meters (e.g., driver resets to the garage or pit stalls). This eliminates straight lines cutting diagonally across the track map.
 * **Reference Anchors**: Computes and overlays a perpendicular Start/Finish line (16-meter span) at the track's first coordinate.
 * **Smart Turn Annotation**: Detects midpoint coordinates of sectors and dynamically offsets turn numbers (e.g. `1`, `2`, `3`...) outward by 15 meters along the path normal vector to avoid overlays and line overlap.
 
-### 2. High-Performance Graphing & Playback
+###  Graphing & Playback
 * Multi-lane telemetry data visualization powered by `egui_plot` and `polars`.
 * Synchronized time/distance scrub cursor, pan, and zoom boundaries across all active channels.
 * An electric orange dot playback tracker coordinates real-time position updates on the track map as the user scrubs through telemetry data.
 
-### 3. Automated Sector Intelligence
+<img width="640" height="360" alt="makeintogif" src="https://github.com/user-attachments/assets/dd33138e-c0a8-4d8b-8484-cadb1aec24da" />
+
+
+### 3. Automated Sector Detection
 * Automated corner and sector detection using spatial telemetry.
 * Comprehensive split times reporting table.
 * Eclectic optimal lap calculation (combining fastest sector splits across the entire session).

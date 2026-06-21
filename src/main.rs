@@ -38,6 +38,7 @@ pub struct LapData {
 }
 
 #[derive(PartialEq, Clone, Copy)]
+#[allow(dead_code)]
 enum WorksheetTab {
     Basic,             // 1. Basic (Driver Inputs: Speed, Throttle, Brake, Steering, RPM, Gear)
     DynamicRake,       // 2. Dynamic Rake Analyzer
@@ -1967,16 +1968,6 @@ impl eframe::App for OpenDavApp {
 
                                     ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Basic, "1. Basic (Inputs)");
                                     ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DynamicRake, "2. Dynamic Rake");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireEnergy, "3. Tire Energy");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireFuelWindows, "4. Tire & Fuel");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TireTempLoad, "5. Temp/Load Map");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::MathSandbox, "6. Custom Math");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::EmpiricalAero, "7. Aero Map");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DownforceMapping, "8. Downforce");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::PitchPlatform, "9. Pitch & Platform");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::HandlingAnalyzer, "10. Handling");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::TlltdDistribution, "11. TLLTD");
-                                    ui.selectable_value(&mut self.active_worksheet, WorksheetTab::CompressionRates, "12. Compression");
                                 });
 
                                 ui.add_space(10.0);
