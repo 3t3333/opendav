@@ -1532,10 +1532,10 @@ impl eframe::App for OpenDavApp {
                         match self.active_page {
                             ActivePage::OpenDav | ActivePage::Reports => {
                                 // 1. CUSTOM CORNER LOGO HEADER
-                                let header_bytes = include_bytes!("../assets/header.png");
+                                let corner_bytes = include_bytes!("../assets/corner_logo.png");
                                 ui.vertical_centered(|ui| {
                                     ui.add(
-                                        egui::Image::from_bytes("bytes://header.png", header_bytes.to_vec())
+                                        egui::Image::from_bytes("bytes://corner_logo.png", corner_bytes.to_vec())
                                             .max_width(240.0) // Fills the sidebar width beautifully!
                                             .maintain_aspect_ratio(true)
                                     );
