@@ -79,6 +79,112 @@ pub struct ChartLane<'a> {
     pub traces: Vec<ChartTrace<'a>>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum CacheSelector {
+    Speed,
+    RPM,
+    Throttle,
+    Brake,
+    Steering,
+    FrontHeight,
+    RearHeight,
+    Rake,
+}
+
+pub struct TraceSpec {
+    pub name: &'static str,
+    pub cache: CacheSelector,
+    pub color: egui::Color32,
+    pub width: f32,
+    pub unit: &'static str,
+}
+
+pub struct LaneSpec {
+    pub title: &'static str,
+    pub y_min: f64,
+    pub y_max: f64,
+    pub traces: Vec<TraceSpec>,
+}
+
+pub struct WorksheetConfig {
+    pub lanes: Vec<LaneSpec>,
+}
+
+impl WorksheetConfig {
+    pub fn basic() -> Self {
+        Self {
+            lanes: vec![
+                LaneSpec {
+                    title: "Ground Speed",
+                    y_min: 76.0,
+                    y_max: 98.0,
+                    traces: vec![
+                        TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
+                    ],
+                },
+                LaneSpec {
+                    title: "Engine RPM",
+                    y_min: 52.0,
+                    y_max: 72.0,
+                    traces: vec![
+                        TraceSpec { name: "RPM", cache: CacheSelector::RPM, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, unit: "" },
+                    ],
+                },
+                LaneSpec {
+                    title: "Pedal Inputs",
+                    y_min: 28.0,
+                    y_max: 48.0,
+                    traces: vec![
+                        TraceSpec { name: "Throttle", cache: CacheSelector::Throttle, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, unit: "%" },
+                        TraceSpec { name: "Brake", cache: CacheSelector::Brake, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, unit: "%" },
+                    ],
+                },
+                LaneSpec {
+                    title: "Steering",
+                    y_min: 10.0,
+                    y_max: 24.0,
+                    traces: vec![
+                        TraceSpec { name: "Steering Angle", cache: CacheSelector::Steering, color: SUB_ACCENT_COLOR, width: 2.2, unit: "°" },
+                    ],
+                },
+            ],
+        }
+    }
+
+    pub fn rake() -> Self {
+        Self {
+            lanes: vec![
+                LaneSpec {
+                    title: "Ground Speed",
+                    y_min: 70.0,
+                    y_max: 98.0,
+                    traces: vec![
+                        TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
+                    ],
+                },
+                LaneSpec {
+                    title: "Axle Heights",
+                    y_min: 40.0,
+                    y_max: 66.0,
+                    traces: vec![
+                        TraceSpec { name: "Front RH", cache: CacheSelector::FrontHeight, color: SUB_ACCENT_COLOR, width: 2.2, unit: "mm" },
+                        TraceSpec { name: "Rear RH", cache: CacheSelector::RearHeight, color: egui::Color32::from_rgb(255, 20, 147), width: 2.2, unit: "mm" },
+                    ],
+                },
+                LaneSpec {
+                    title: "Chassis Attitude",
+                    y_min: 12.0,
+                    y_max: 36.0,
+                    traces: vec![
+                        TraceSpec { name: "Dynamic Rake", cache: CacheSelector::Rake, color: ACCENT_COLOR, width: 2.2, unit: "mm" },
+                    ],
+                },
+            ],
+        }
+    }
+}
+
+
 pub struct OpenDavApp {
     app_state: AppState,
     active_page: ActivePage,
@@ -941,115 +1047,123 @@ impl OpenDavApp {
 // Zero-allocation, multi-lane, double-click zoom capable plot drawer!
 // Ensures 100% consistent interactions across ALL current and future tabs!
 impl OpenDavApp {
-    fn draw_motec_plot(&mut self, ui: &mut egui::Ui, plot_id: &str, worksheet: WorksheetTab, is_tab_switch: bool) {
+    fn get_cache_slice(&self, selector: CacheSelector) -> &[[f64; 2]] {
+        match selector {
+            CacheSelector::Speed => &self.speed_pts_cache,
+            CacheSelector::RPM => &self.rpm_pts_cache,
+            CacheSelector::Throttle => &self.throttle_pts_cache,
+            CacheSelector::Brake => &self.brake_pts_cache,
+            CacheSelector::Steering => &self.steering_pts_cache,
+            CacheSelector::FrontHeight => &self.front_pts_cache,
+            CacheSelector::RearHeight => &self.rear_pts_cache,
+            CacheSelector::Rake => &self.rake_pts_cache,
+        }
+    }
+
+    fn get_raw_value(&self, selector: CacheSelector, idx: usize) -> f64 {
+        if let Some(session) = &self.session {
+            match selector {
+                CacheSelector::Speed => {
+                    session.dataframe.column("Speed").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0) * 3.6)
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::RPM => {
+                    session.dataframe.column("RPM").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0))
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::Throttle => {
+                    session.dataframe.column("Throttle").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::Brake => {
+                    session.dataframe.column("Brake").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::Steering => {
+                    session.dataframe.column("SteeringWheelAngle").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0) * 57.2958)
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::FrontHeight => {
+                    if idx < session.front_smooth.len() {
+                        let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
+                        session.front_smooth[idx] * scale
+                    } else {
+                        0.0
+                    }
+                }
+                CacheSelector::RearHeight => {
+                    if idx < session.rear_smooth.len() {
+                        let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
+                        session.rear_smooth[idx] * scale
+                    } else {
+                        0.0
+                    }
+                }
+                CacheSelector::Rake => {
+                    if idx < session.rake.len() {
+                        let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
+                        session.rake[idx] * scale
+                    } else {
+                        0.0
+                    }
+                }
+            }
+        } else {
+            0.0
+        }
+    }
+
+    fn draw_motec_plot(&mut self, ui: &mut egui::Ui, plot_id: &str, config: &WorksheetConfig, is_tab_switch: bool) {
         if self.front_pts_cache.is_empty() { return; }
         
         let max_time = self.front_pts_cache.last().unwrap()[0];
         let is_dark = ui.style().visuals.dark_mode;
 
         // 1. EXTRACT RAW HUD METRICS AT PLAYBACK CURSOR INDEX (EXCLUSIVE ZERO-CONFLICT SCOPE!)
-        let mut raw_val_speed = 0.0;
-        let mut raw_val_throttle = 0.0;
-        let mut raw_val_brake = 0.0;
-        let mut raw_val_steering = 0.0;
-        let mut raw_val_rpm = 0.0;
-        let mut raw_val_gear = 0.0;
-        let mut raw_val_front = 0.0;
-        let mut raw_val_rear = 0.0;
-        let mut raw_val_rake = 0.0;
-
+        let mut idx = 0;
+        let mut has_cursor = false;
         if let Some(cx) = self.cursor_x {
-            let idx = get_closest_index(&self.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
-            if let Some(session) = &self.session {
-                let speed_col = session.dataframe.column("Speed").ok().map(|c| c.f64().ok()).flatten();
-                let throttle_col = session.dataframe.column("Throttle").ok().map(|c| c.f64().ok()).flatten();
-                let brake_col = session.dataframe.column("Brake").ok().map(|c| c.f64().ok()).flatten();
-                let steering_col = session.dataframe.column("SteeringWheelAngle").ok().map(|c| c.f64().ok()).flatten();
-                let rpm_col = session.dataframe.column("RPM").ok().map(|c| c.f64().ok()).flatten();
-                let gear_col = session.dataframe.column("Gear").ok().map(|c| c.f64().ok()).flatten();
-
-                raw_val_speed = speed_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 3.6;
-                raw_val_throttle = throttle_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
-                raw_val_brake = brake_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
-                raw_val_steering = steering_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0) * 57.2958;
-                raw_val_rpm = rpm_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0);
-                raw_val_gear = gear_col.map(|c| c.get(idx).unwrap_or(0.0)).unwrap_or(0.0);
-
-                if idx < session.front_smooth.len() {
-                    let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
-                    raw_val_front = session.front_smooth[idx] * scale;
-                    raw_val_rear = session.rear_smooth[idx] * scale;
-                    raw_val_rake = session.rake[idx] * scale;
-                }
-            }
+            idx = get_closest_index(&self.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
+            has_cursor = true;
         }
 
-        // 2. CONSTRUCT LANES ACCORDING TO WORKSHEET TYPE
-        let lanes = match worksheet {
-            WorksheetTab::Basic => vec![
-                ChartLane {
-                    title: "Ground Speed",
-                    y_min: 76.0,
-                    y_max: 98.0,
-                    traces: vec![
-                        ChartTrace { name: "Speed", scaled_pts: &self.speed_pts_cache, color: SPEED_COLOR, width: 2.2, raw_val: raw_val_speed, unit: " km/h" },
-                    ],
-                },
-                ChartLane {
-                    title: "Engine RPM",
-                    y_min: 52.0,
-                    y_max: 72.0,
-                    traces: vec![
-                        ChartTrace { name: "RPM", scaled_pts: &self.rpm_pts_cache, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, raw_val: raw_val_rpm, unit: "" },
-                    ],
-                },
-                ChartLane {
-                    title: "Pedal Inputs",
-                    y_min: 28.0,
-                    y_max: 48.0,
-                    traces: vec![
-                        ChartTrace { name: "Throttle", scaled_pts: &self.throttle_pts_cache, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, raw_val: raw_val_throttle, unit: "%" },
-                        ChartTrace { name: "Brake", scaled_pts: &self.brake_pts_cache, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, raw_val: raw_val_brake, unit: "%" },
-                    ],
-                },
-                ChartLane {
-                    title: "Steering",
-                    y_min: 10.0,
-                    y_max: 24.0,
-                    traces: vec![
-                        ChartTrace { name: "Steering Angle", scaled_pts: &self.steering_pts_cache, color: SUB_ACCENT_COLOR, width: 2.2, raw_val: raw_val_steering, unit: "°" },
-                    ],
-                },
-            ],
-            WorksheetTab::DynamicRake => vec![
-                ChartLane {
-                    title: "Ground Speed",
-                    y_min: 70.0,
-                    y_max: 98.0,
-                    traces: vec![
-                        ChartTrace { name: "Speed", scaled_pts: &self.speed_pts_cache, color: SPEED_COLOR, width: 2.2, raw_val: raw_val_speed, unit: " km/h" },
-                    ],
-                },
-                ChartLane {
-                    title: "Axle Heights",
-                    y_min: 40.0,
-                    y_max: 66.0,
-                    traces: vec![
-                        ChartTrace { name: "Front RH", scaled_pts: &self.front_pts_cache, color: SUB_ACCENT_COLOR, width: 2.2, raw_val: raw_val_front, unit: "mm" },
-                        ChartTrace { name: "Rear RH", scaled_pts: &self.rear_pts_cache, color: egui::Color32::from_rgb(255, 20, 147), width: 2.2, raw_val: raw_val_rear, unit: "mm" },
-                    ],
-                },
-                ChartLane {
-                    title: "Chassis Attitude",
-                    y_min: 12.0,
-                    y_max: 36.0,
-                    traces: vec![
-                        ChartTrace { name: "Dynamic Rake", scaled_pts: &self.rake_pts_cache, color: ACCENT_COLOR, width: 2.2, raw_val: raw_val_rake, unit: "mm" },
-                    ],
-                },
-            ],
-            _ => vec![],
-        };
+        // 2. CONSTRUCT RUNTIME LANES FROM STATIC CONFIG SPECIFICATION
+        let mut lanes = Vec::new();
+        for lane_spec in &config.lanes {
+            let mut traces = Vec::new();
+            for trace_spec in &lane_spec.traces {
+                let raw_val = if has_cursor {
+                    self.get_raw_value(trace_spec.cache, idx)
+                } else {
+                    0.0
+                };
+                let scaled_pts = self.get_cache_slice(trace_spec.cache);
+                traces.push(ChartTrace {
+                    name: trace_spec.name,
+                    scaled_pts,
+                    color: trace_spec.color,
+                    width: trace_spec.width,
+                    raw_val,
+                    unit: trace_spec.unit,
+                });
+            }
+            lanes.push(ChartLane {
+                title: lane_spec.title,
+                y_min: lane_spec.y_min,
+                y_max: lane_spec.y_max,
+                traces,
+            });
+        }
 
         // 3. RENDER MASTER DYNAMIC HUD HEADERS ROW
         ui.horizontal(|ui| {
@@ -2031,27 +2145,31 @@ impl eframe::App for OpenDavApp {
                                 }
 
                                 // 2. ACTIVE WORKSHEET PLOTTING AREA (SINGLE INTEGRATED HIGH-PERFORMANCE PLOT ENVIRONMENT!)
+                                let config = match self.active_worksheet {
+                                    WorksheetTab::Basic => Some(WorksheetConfig::basic()),
+                                    WorksheetTab::DynamicRake => Some(WorksheetConfig::rake()),
+                                    _ => None,
+                                };
+
                                 if self.show_graphs_track_map {
                                     let total_h = ui.available_height();
                                     let half_h = (total_h - 20.0) / 2.0;
 
                                     ui.allocate_ui(egui::vec2(ui.available_width(), half_h), |ui| {
-                                        match self.active_worksheet {
-                                            WorksheetTab::Basic => {
-                                                self.draw_motec_plot(ui, "basic_worksheet_canvas", WorksheetTab::Basic, is_tab_switch);
-                                            }
-                                            WorksheetTab::DynamicRake => {
-                                                self.draw_motec_plot(ui, "rake_worksheet_canvas", WorksheetTab::DynamicRake, is_tab_switch);
-                                            }
-                                            _ => {
-                                                ui.centered_and_justified(|ui| {
-                                                    ui.vertical_centered(|ui| {
-                                                        ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
-                                                        ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
-                                                        ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
-                                                    });
+                                        if let Some(cfg) = &config {
+                                            let canvas_id = match self.active_worksheet {
+                                                WorksheetTab::Basic => "basic_worksheet_canvas",
+                                                _ => "rake_worksheet_canvas",
+                                            };
+                                            self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);
+                                        } else {
+                                            ui.centered_and_justified(|ui| {
+                                                ui.vertical_centered(|ui| {
+                                                    ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
+                                                    ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
+                                                    ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
                                                 });
-                                            }
+                                            });
                                         }
                                     });
 
@@ -2063,22 +2181,20 @@ impl eframe::App for OpenDavApp {
                                         self.draw_interactive_track_map(ui, half_h - 10.0);
                                     });
                                 } else {
-                                    match self.active_worksheet {
-                                        WorksheetTab::Basic => {
-                                            self.draw_motec_plot(ui, "basic_worksheet_canvas", WorksheetTab::Basic, is_tab_switch);
-                                        }
-                                        WorksheetTab::DynamicRake => {
-                                            self.draw_motec_plot(ui, "rake_worksheet_canvas", WorksheetTab::DynamicRake, is_tab_switch);
-                                        }
-                                        _ => {
-                                            ui.centered_and_justified(|ui| {
-                                                ui.vertical_centered(|ui| {
-                                                    ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
-                                                    ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
-                                                    ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
-                                                });
+                                    if let Some(cfg) = &config {
+                                        let canvas_id = match self.active_worksheet {
+                                            WorksheetTab::Basic => "basic_worksheet_canvas",
+                                            _ => "rake_worksheet_canvas",
+                                        };
+                                        self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);
+                                    } else {
+                                        ui.centered_and_justified(|ui| {
+                                            ui.vertical_centered(|ui| {
+                                                ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
+                                                ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
+                                                ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
                                             });
-                                        }
+                                        });
                                     }
                                 }
                             }
