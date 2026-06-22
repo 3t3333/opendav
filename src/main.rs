@@ -137,6 +137,9 @@ pub struct OpenDavApp {
     sectors: Vec<TrackSector>,
     sector_bests: Vec<f64>,
     lap_data_cache: Vec<LapData>,
+    show_graphs_track_map: bool,
+    previous_page: Option<ActivePage>,
+    previous_show_graphs_track_map: Option<bool>,
 }
 
 impl Default for OpenDavApp {
@@ -173,6 +176,9 @@ impl Default for OpenDavApp {
             sectors: Vec::new(),
             sector_bests: Vec::new(),
             lap_data_cache: Vec::new(),
+            show_graphs_track_map: false,
+            previous_page: None,
+            previous_show_graphs_track_map: None,
         }
     }
 }
@@ -187,6 +193,8 @@ fn format_lap_time(sec: f64) -> String {
 
 // Spawns a background thread to download the track map SVG from the public iRacing static assets CDN
 fn trigger_track_map_download(track_id: i32) {
+    let download_enabled = false; // Set to true to re-enable CDN downloading
+    if !download_enabled { return; }
     if track_id <= 0 { return; }
     std::thread::spawn(move || {
         let dest_dir = std::path::Path::new("exports/track_maps");
@@ -1061,7 +1069,8 @@ impl OpenDavApp {
 
         // 4. INITIALIZE UNIFIED PLOT CANVAS
         let mut plot_height = ui.available_height() - 10.0;
-        if plot_height < 300.0 { plot_height = 300.0; }
+        let min_h = if self.show_graphs_track_map { 150.0 } else { 300.0 };
+        if plot_height < min_h { plot_height = min_h; }
 
         let mut plot = Plot::new(plot_id)
             .height(plot_height)
@@ -1100,7 +1109,6 @@ impl OpenDavApp {
         let lap_markers = &self.lap_markers;
 
         plot.show(ui, |plot_ui| {
-            let is_left_click_down = plot_ui.ctx().input(|i| i.pointer.button_down(egui::PointerButton::Primary));
 
             // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
             if plot_ui.response().double_clicked() {
@@ -1322,13 +1330,13 @@ impl OpenDavApp {
             }
 
             // L. TIME DRAG DETECTION & SCRUBBING
-            if plot_ui.ctx().input(|i| i.pointer.any_pressed()) {
+            if plot_ui.response().drag_started() {
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     is_dragging_ticker = pointer_pos.y < 9.5;
                 }
             }
 
-            if is_left_click_down {
+            if plot_ui.response().dragged() {
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let click_pos = pointer_pos.x.clamp(0.0, max_time);
                     if is_highlight_active {
@@ -1360,8 +1368,31 @@ impl OpenDavApp {
                 }
             }
 
+            if plot_ui.response().clicked() {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    let click_pos = pointer_pos.x.clamp(0.0, max_time);
+                    if is_highlight_active {
+                        if !plot_ui.response().double_clicked() {
+                            if let Some(x_start) = highlight_start {
+                                let zoom_min = f64::min(x_start, click_pos);
+                                let zoom_max = f64::max(x_start, click_pos);
+                                if (zoom_max - zoom_min).abs() > 0.1 {
+                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
+                                    cursor_x = Some(zoom_min);
+                                    visible_x_range = Some((zoom_min, zoom_max));
+                                }
+                                is_highlight_active = false;
+                                highlight_start = None;
+                            }
+                        }
+                    } else {
+                        cursor_x = Some(click_pos);
+                    }
+                }
+            }
+
             // M. SILKY-SMOOTH HIGH-PRECISION ZOOM WHEEL
-            if !is_left_click_down {
+            if plot_ui.response().hovered() {
                 let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
                 if scroll.y.abs() > 1.5 {
                     let is_zooming_in = scroll.y > 0.0;
@@ -1441,50 +1472,48 @@ impl eframe::App for OpenDavApp {
                     return;
                 }
 
-                // Render Splash Window
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(height_offset(ui) - 240.0);
-                            
-                            let splash_bytes = include_bytes!("../assets/solid_splashscreen.png");
-                            ui.add(
-                                egui::Image::from_bytes("bytes://splash.png", splash_bytes.to_vec())
-                                    .max_width(700.0) 
-                                    .rounding(12.0)
-                            );
-                            
-                            ui.add_space(45.0);
+                // Render splash screen with a sleek obsidian backdrop
+                let panel_frame = egui::Frame::central_panel(&ctx.style())
+                    .fill(DARK_BG_COLOR)
+                    .inner_margin(egui::Margin::same(0));
+                egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
+                    let size = ui.available_size();
+                    
+                    // Center the logo and loading bar vertically and horizontally
+                    let logo_width = 550.0;
+                    let logo_height = logo_width * (1440.0 / 2560.0); // 2560x1440 ratio
+                    
+                    let group_height = logo_height + 40.0 + 4.0;
+                    let start_y = (size.y - group_height) / 2.0;
+                    
+                    let logo_rect = egui::Rect::from_min_size(
+                        egui::pos2((size.x - logo_width) / 2.0, start_y),
+                        egui::vec2(logo_width, logo_height)
+                    );
+                    
+                    let logo_bytes = include_bytes!("../assets/transparent_full_opendav_logo.png");
+                    
+                    ui.put(
+                        logo_rect,
+                        egui::Image::from_bytes("bytes://transparent_full_opendav_logo.png", logo_bytes.to_vec())
+                    );
+                    
+                    // Draw the loading progress bar underneath the logo
+                    let bar_width = 300.0;
+                    let bar_height = 3.0; // Thin and elegant
+                    let bar_rect = egui::Rect::from_center_size(
+                        egui::pos2(size.x / 2.0, logo_rect.max.y + 40.0),
+                        egui::vec2(bar_width, bar_height)
+                    );
+                    
+                    let progress_bg = egui::Color32::from_rgb(25, 25, 25);
+                    ui.painter().rect_filled(bar_rect, 1.5, progress_bg);
 
-                            ui.vertical_centered(|ui| {
-                                let width = 380.0;
-                                let height = 5.0;
-                                let (rect, _response) = ui.allocate_exact_size(
-                                    egui::vec2(width, height),
-                                    egui::Sense::hover()
-                                );
+                    let active_width = bar_width * (*progress);
+                    let mut active_rect = bar_rect;
+                    active_rect.max.x = active_rect.min.x + active_width;
 
-                                if ui.is_rect_visible(rect) {
-                                    let progress_bg = if is_dark { egui::Color32::from_rgb(25, 25, 25) } else { egui::Color32::from_rgb(200, 200, 200) };
-                                    ui.painter().rect_filled(rect, 3.0, progress_bg);
-
-                                    let active_width = width * (*progress);
-                                    let mut active_rect = rect;
-                                    active_rect.max.x = active_rect.min.x + active_width;
-
-                                    ui.painter().rect_filled(active_rect, 3.0, ACCENT_COLOR);
-                                }
-                            });
-
-                            ui.add_space(15.0);
-                            ui.label(
-                                egui::RichText::new("BOOTING SYSTEM CORE...")
-                                    .color(ACCENT_COLOR)
-                                    .size(10.0)
-                                    .strong()
-                            );
-                        });
-                    });
+                    ui.painter().rect_filled(active_rect, 1.5, ACCENT_COLOR);
                 });
             }
             AppState::Main => {
@@ -1503,10 +1532,10 @@ impl eframe::App for OpenDavApp {
                         match self.active_page {
                             ActivePage::OpenDav | ActivePage::Reports => {
                                 // 1. CUSTOM CORNER LOGO HEADER
-                                let corner_bytes = include_bytes!("../assets/corner_logo.png");
+                                let header_bytes = include_bytes!("../assets/header.png");
                                 ui.vertical_centered(|ui| {
                                     ui.add(
-                                        egui::Image::from_bytes("bytes://corner_logo.png", corner_bytes.to_vec())
+                                        egui::Image::from_bytes("bytes://header.png", header_bytes.to_vec())
                                             .max_width(240.0) // Fills the sidebar width beautifully!
                                             .maintain_aspect_ratio(true)
                                     );
@@ -1718,7 +1747,7 @@ impl eframe::App for OpenDavApp {
 
                         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                             ui.add_space(10.0);
-                            ui.label(egui::RichText::new("v0.1.0-rs").color(egui::Color32::DARK_GRAY).small());
+                            ui.label(egui::RichText::new("v0.2.0-rs").color(egui::Color32::DARK_GRAY).small());
                         });
                     });
 
@@ -1770,6 +1799,18 @@ impl eframe::App for OpenDavApp {
                                 ui.separator();
                             }
                             egui::widgets::global_theme_preference_switch(ui);
+                            
+                            // Tiny little uppercase letter T button right next to the theme switcher, only visible in Graphs page
+                            if self.active_page == ActivePage::Graphs {
+                                let t_text = if self.show_graphs_track_map {
+                                    egui::RichText::new("T").strong().color(ACCENT_COLOR)
+                                } else {
+                                    egui::RichText::new("T").strong()
+                                };
+                                if ui.add(egui::Button::new(t_text).frame(true)).on_hover_text("Toggle Track Map View").clicked() {
+                                    self.show_graphs_track_map = !self.show_graphs_track_map;
+                                }
+                            }
                         });
                     });
                     ui.add_space(6.0);
@@ -1974,30 +2015,70 @@ impl eframe::App for OpenDavApp {
                                 ui.separator();
                                 ui.add_space(10.0);
 
-                                // Calculate if tab was switched this frame to trigger shared viewport boundary syncing!
+                                // Calculate if tab, page, or layout was switched this frame to trigger shared viewport boundary syncing!
                                 let mut is_tab_switch = false;
                                 if Some(self.active_worksheet) != self.previous_worksheet {
                                     is_tab_switch = true;
                                     self.previous_worksheet = Some(self.active_worksheet);
                                 }
+                                if Some(self.active_page) != self.previous_page {
+                                    is_tab_switch = true;
+                                    self.previous_page = Some(self.active_page);
+                                }
+                                if Some(self.show_graphs_track_map) != self.previous_show_graphs_track_map {
+                                    is_tab_switch = true;
+                                    self.previous_show_graphs_track_map = Some(self.show_graphs_track_map);
+                                }
 
                                 // 2. ACTIVE WORKSHEET PLOTTING AREA (SINGLE INTEGRATED HIGH-PERFORMANCE PLOT ENVIRONMENT!)
-                                match self.active_worksheet {
-                                    WorksheetTab::Basic => {
-                                        self.draw_motec_plot(ui, "basic_worksheet_canvas", WorksheetTab::Basic, is_tab_switch);
-                                    }
-                                    WorksheetTab::DynamicRake => {
-                                        self.draw_motec_plot(ui, "rake_worksheet_canvas", WorksheetTab::DynamicRake, is_tab_switch);
-                                    }
-                                    _ => {
-                                        // Placeholder for other tabs standing by
-                                        ui.centered_and_justified(|ui| {
-                                            ui.vertical_centered(|ui| {
-                                                ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
-                                                ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
-                                                ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
+                                if self.show_graphs_track_map {
+                                    let total_h = ui.available_height();
+                                    let half_h = (total_h - 20.0) / 2.0;
+
+                                    ui.allocate_ui(egui::vec2(ui.available_width(), half_h), |ui| {
+                                        match self.active_worksheet {
+                                            WorksheetTab::Basic => {
+                                                self.draw_motec_plot(ui, "basic_worksheet_canvas", WorksheetTab::Basic, is_tab_switch);
+                                            }
+                                            WorksheetTab::DynamicRake => {
+                                                self.draw_motec_plot(ui, "rake_worksheet_canvas", WorksheetTab::DynamicRake, is_tab_switch);
+                                            }
+                                            _ => {
+                                                ui.centered_and_justified(|ui| {
+                                                    ui.vertical_centered(|ui| {
+                                                        ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
+                                                        ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
+                                                        ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
+                                                    });
+                                                });
+                                            }
+                                        }
+                                    });
+
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(8.0);
+
+                                    ui.group(|ui| {
+                                        self.draw_interactive_track_map(ui, half_h - 10.0);
+                                    });
+                                } else {
+                                    match self.active_worksheet {
+                                        WorksheetTab::Basic => {
+                                            self.draw_motec_plot(ui, "basic_worksheet_canvas", WorksheetTab::Basic, is_tab_switch);
+                                        }
+                                        WorksheetTab::DynamicRake => {
+                                            self.draw_motec_plot(ui, "rake_worksheet_canvas", WorksheetTab::DynamicRake, is_tab_switch);
+                                        }
+                                        _ => {
+                                            ui.centered_and_justified(|ui| {
+                                                ui.vertical_centered(|ui| {
+                                                    ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
+                                                    ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
+                                                    ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
+                                                });
                                             });
-                                        });
+                                        }
                                     }
                                 }
                             }
@@ -2308,16 +2389,36 @@ impl OpenDavApp {
 }
 
 fn main() -> eframe::Result<()> {
+    // Load window icon from assets
+    let icon_bytes = include_bytes!("../assets/icon.png");
+    let icon_data = if let Ok(img) = image::load_from_memory(icon_bytes) {
+        let rgba = img.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        Some(egui::IconData {
+            rgba: rgba.into_raw(),
+            width,
+            height,
+        })
+    } else {
+        None
+    };
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1150.0, 720.0]) 
+        .with_min_inner_size([800.0, 500.0])
+        .with_title("OpenDav");
+
+    if let Some(icon) = icon_data {
+        viewport = viewport.with_icon(icon);
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1150.0, 720.0]) 
-            .with_min_inner_size([800.0, 500.0])
-            .with_title("OpenDAV Telemetry Suite"),
+        viewport,
         ..Default::default()
     };
 
     eframe::run_native(
-        "OpenDAV",
+        "OpenDav",
         native_options,
         Box::new(|cc| Ok(Box::new(OpenDavApp::new(cc)))),
     )
