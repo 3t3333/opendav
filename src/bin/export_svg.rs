@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-#[path = "../ibt_parser.rs"]
+#[path = "../data/ibt_parser.rs"]
 mod ibt_parser;
 
 fn get_fastest_lap(lap_times: &[(i32, f64)]) -> i32 {
