@@ -7,7 +7,7 @@ use crate::signals::processing::{
 
 impl OpenDavApp {
     pub fn draw_dashboard_page(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        if !self.session_loaded || self.session.is_none() {
+        if !self.session_loaded || self.sessions.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(egui::RichText::new("Awaiting Telemetry Stream").heading().color(SUB_ACCENT_COLOR));
@@ -18,7 +18,7 @@ impl OpenDavApp {
         }
 
         // SAFE IMMUTABLE CLONING TO RESOLVE RUST BORROW CHECKER CLOSURE LOCKS
-        let session_ref = self.session.as_ref().unwrap();
+        let session_ref = &self.sessions[self.primary_session_idx].session;
         let car = session_ref.car.clone();
         let venue = session_ref.venue.clone();
         let air_temp = session_ref.air_temp.clone();
@@ -114,7 +114,7 @@ impl OpenDavApp {
                         let mut col_count = 0;
                         for (lap_num, duration) in &lap_times {
                             let is_fastest = *lap_num == fastest_lap;
-                            let is_selected = self.selected_lap == Some(*lap_num);
+                            let is_selected = self.selected_lap == Some((self.primary_session_idx, *lap_num));
                             
                             let mut row_text = format!("Lap {} : {}", lap_num, format_lap_time(*duration));
                             if is_fastest {
@@ -139,9 +139,9 @@ impl OpenDavApp {
                                 }).inner;
 
                             if btn_resp.clicked() {
-                                self.selected_lap = Some(*lap_num);
-                                if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == *lap_num) {
-                                    let (_, start_t, _end_t) = self.lap_ranges[pos];
+                                self.selected_lap = Some((self.primary_session_idx, *lap_num));
+                                if let Some(pos) = self.sessions[self.primary_session_idx].lap_ranges.iter().position(|r| r.0 == *lap_num) {
+                                    let (_, start_t, _end_t) = self.sessions[self.primary_session_idx].lap_ranges[pos];
                                     self.cursor_x = Some(start_t);
                                     self.reset_bounds_flag = true;
                                 }
@@ -170,18 +170,17 @@ impl OpenDavApp {
         ui.add_space(15.0);
         ui.vertical_centered(|ui| {
             if ui.button(egui::RichText::new("📈 OPEN GRAPHS WORKSPACE").strong().size(12.0).color(if is_dark { egui::Color32::from_rgb(10, 10, 10) } else { egui::Color32::WHITE })).clicked() {
+                // Rebuild track sectors and sector bests cache using Signals Layer
                 self.active_page = ActivePage::Graphs;
-                // Default to fastest lap on first entering graphs page
                 if self.selected_lap.is_none() {
-                    self.selected_lap = Some(fastest_lap);
-                    self.rebuild_points_cache();
+                    self.selected_lap = Some((self.primary_session_idx, fastest_lap));
                 }
             }
         });
     }
 
     pub fn draw_graphs_page(&mut self, ui: &mut egui::Ui) {
-        if !self.session_loaded || self.session.is_none() {
+        if !self.session_loaded || self.sessions.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(egui::RichText::new("Awaiting Telemetry Stream").heading().color(SUB_ACCENT_COLOR));
@@ -275,7 +274,7 @@ impl OpenDavApp {
     }
 
     pub fn draw_reports_page(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        if !self.session_loaded || self.session.is_none() {
+        if !self.session_loaded || self.sessions.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(egui::RichText::new("Awaiting Telemetry Stream").heading().color(SUB_ACCENT_COLOR));
@@ -285,8 +284,7 @@ impl OpenDavApp {
             return;
         }
 
-        let session_ref = self.session.as_ref().unwrap();
-        let venue = session_ref.venue.clone();
+        let venue = self.sessions[self.primary_session_idx].session.venue.clone();
 
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("Sector Analysis Report").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
@@ -298,16 +296,22 @@ impl OpenDavApp {
         ui.separator();
         ui.add_space(10.0);
 
-        if self.lap_data_cache.is_empty() || self.sectors.is_empty() {
+        let has_data = {
+            let loaded = &self.sessions[self.primary_session_idx];
+            !loaded.lap_data_cache.is_empty() && !loaded.sectors.is_empty()
+        };
+
+        if !has_data {
             ui.label("No sector or lap data available for report.");
         } else {
             ui.columns(2, |cols| {
                 cols[0].vertical(|ui| {
-                    let mut visible_laps: Vec<&crate::signals::processing::LapData> = self.lap_data_cache.iter()
+                    let loaded = &self.sessions[self.primary_session_idx];
+                    let mut visible_laps: Vec<&crate::signals::processing::LapData> = loaded.lap_data_cache.iter()
                         .filter(|lap| lap.lap_num > 3)
                         .collect();
                     if visible_laps.is_empty() {
-                        visible_laps = self.lap_data_cache.iter().collect();
+                        visible_laps = loaded.lap_data_cache.iter().collect();
                     }
 
                     let best_total_time = visible_laps.iter()
@@ -317,7 +321,7 @@ impl OpenDavApp {
                         .unwrap_or(0.0);
 
                     egui::ScrollArea::both()
-                        .id_source("sector_report_scroll")
+                        .id_salt("sector_report_scroll")
                         .show(ui, |ui| {
                             egui::Grid::new("sector_report_grid")
                                 .striped(true)
@@ -333,10 +337,10 @@ impl OpenDavApp {
                                     ui.end_row();
 
                                     // Sector split rows
-                                    for (s_idx, sector) in self.sectors.iter().enumerate() {
+                                    for (s_idx, sector) in loaded.sectors.iter().enumerate() {
                                         ui.label(egui::RichText::new(&sector.name).strong());
 
-                                        let best_s_time = self.sector_bests.get(s_idx).copied().unwrap_or(0.0);
+                                        let best_s_time = loaded.sector_bests.get(s_idx).copied().unwrap_or(0.0);
 
                                         for lap in &visible_laps {
                                             let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
@@ -389,7 +393,7 @@ impl OpenDavApp {
                                         ui.label(text);
                                     }
 
-                                    let optimal_total = self.sector_bests.iter().sum::<f64>();
+                                    let optimal_total = loaded.sector_bests.iter().sum::<f64>();
                                     let opt_total_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
                                     ui.label(egui::RichText::new(format_lap_time(optimal_total)).color(opt_total_color).strong());
                                     ui.end_row();

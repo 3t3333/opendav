@@ -7,7 +7,7 @@ use crate::signals::processing::{
 
 impl OpenDavApp {
     pub fn draw_interactive_track_map(&mut self, ui: &mut egui::Ui, height: f32) {
-        if self.lap_data_cache.is_empty() {
+        if self.sessions.is_empty() || self.sessions[self.primary_session_idx].lap_data_cache.is_empty() {
             ui.label("No track map coordinates precomputed.");
             return;
         }
@@ -25,17 +25,14 @@ impl OpenDavApp {
             }
         });
 
+        let loaded = &self.sessions[self.primary_session_idx];
         let is_dark = ui.style().visuals.dark_mode;
-        let active_lap_num = self.selected_lap.unwrap_or_else(|| {
-            if let Some(session) = &self.session {
-                get_fastest_lap(&session.lap_times)
-            } else {
-                0
-            }
+        let active_lap_num = self.selected_lap.map(|(_, lap)| lap).unwrap_or_else(|| {
+            get_fastest_lap(&loaded.session.lap_times)
         });
 
         // Find the active lap data
-        let active_lap = self.lap_data_cache.iter().find(|l| l.lap_num == active_lap_num);
+        let active_lap = loaded.lap_data_cache.iter().find(|l| l.lap_num == active_lap_num);
         if active_lap.is_none() {
             ui.label("Active lap data not found in cache.");
             return;
@@ -43,8 +40,8 @@ impl OpenDavApp {
         let active_lap = active_lap.unwrap();
 
         // Let's get the reference overlay laps if selected
-        let ref_cyan_lap = self.ref_lap_cyan.and_then(|num| self.lap_data_cache.iter().find(|l| l.lap_num == num));
-        let ref_white_lap = self.ref_lap_white.and_then(|num| self.lap_data_cache.iter().find(|l| l.lap_num == num));
+        let ref_cyan_lap = self.ref_lap_cyan.and_then(|(s_idx, num)| self.sessions[s_idx].lap_data_cache.iter().find(|l| l.lap_num == num));
+        let ref_white_lap = self.ref_lap_white.and_then(|(s_idx, num)| self.sessions[s_idx].lap_data_cache.iter().find(|l| l.lap_num == num));
 
         // Initialize the egui_plot
         let plot = Plot::new("interactive_track_map_plot")
@@ -73,7 +70,7 @@ impl OpenDavApp {
                 let color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
                 let segments = get_lap_segments(lap);
                 for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
-                    plot_ui.line(Line::new(format!("Ref Lap {} (Cyan) - Seg {}", self.ref_lap_cyan.unwrap(), seg_idx), PlotPoints::from(seg_pts))
+                    plot_ui.line(Line::new(format!("Ref Lap {} (Cyan) - Seg {}", self.ref_lap_cyan.unwrap().1, seg_idx), PlotPoints::from(seg_pts))
                         .color(color)
                         .width(1.2)
                     );
@@ -84,7 +81,7 @@ impl OpenDavApp {
                 let color = if is_dark { egui::Color32::WHITE } else { egui::Color32::from_rgb(100, 100, 100) };
                 let segments = get_lap_segments(lap);
                 for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
-                    plot_ui.line(Line::new(format!("Ref Lap {} (White) - Seg {}", self.ref_lap_white.unwrap(), seg_idx), PlotPoints::from(seg_pts))
+                    plot_ui.line(Line::new(format!("Ref Lap {} (White) - Seg {}", self.ref_lap_white.unwrap().1, seg_idx), PlotPoints::from(seg_pts))
                         .color(color)
                         .width(1.2)
                     );
@@ -93,7 +90,7 @@ impl OpenDavApp {
 
             // 2. Draw Active Lap (color-coded by sector if show_deltas is true)
             if show_deltas {
-                for (s_idx, sector) in self.sectors.iter().enumerate() {
+                for (s_idx, sector) in loaded.sectors.iter().enumerate() {
                     let delta = self.sector_deltas.get(s_idx).copied().flatten();
                     let seg_color = if let Some(d) = delta {
                         if d <= 0.0 {
@@ -156,7 +153,7 @@ impl OpenDavApp {
             }
 
             // 4. Draw Turn Labels and Sector Times at corner midpoints
-            for (s_idx, sector) in self.sectors.iter().enumerate() {
+            for (s_idx, sector) in loaded.sectors.iter().enumerate() {
                 if sector.name.starts_with("Turn") {
                     let mid_dist = (sector.start_dist + sector.end_dist) / 2.0;
                     let (tx, ty) = get_lap_coord_at_distance(active_lap, mid_dist);
@@ -227,8 +224,8 @@ impl OpenDavApp {
             // 5. Draw Live Car Playback Position Dot (locked to cursor_x)
             if let Some(cx) = self.cursor_x {
                 let mut lap_rel_time = 0.0;
-                if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == active_lap_num) {
-                    let (_, start_t, end_t) = self.lap_ranges[pos];
+                if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == active_lap_num) {
+                    let (_, start_t, end_t) = loaded.lap_ranges[pos];
                     if cx >= start_t && cx <= end_t {
                         lap_rel_time = cx - start_t;
                     } else if cx > end_t {

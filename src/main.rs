@@ -22,15 +22,10 @@ pub enum AppState {
     Main,
 }
 
-pub struct OpenDavApp {
-    pub app_state: AppState,
-    pub active_page: ActivePage,
-    pub active_worksheet: WorksheetTab,
-    pub session_loaded: bool,
-    pub active_file: Option<String>,
-    pub session: Option<crate::data::ibt_parser::IbtSession>,
-    pub fade_value: f32, // Smooth UI fade-in animation tracker
-
+pub struct LoadedSession {
+    pub file_name: String,
+    pub session: crate::data::ibt_parser::IbtSession,
+    
     // Caching compiled, scaled PlotPoints for 300+ FPS zero-allocation rendering!
     pub front_pts_cache: Vec<[f64; 2]>,
     pub rear_pts_cache: Vec<[f64; 2]>,
@@ -49,9 +44,26 @@ pub struct OpenDavApp {
 
     // Precomputed Lap start timestamps (relative to stint start in seconds) for dotted red line dividers
     pub lap_markers: Vec<f64>,
+    
+    // Sector reports caches
+    pub sectors: Vec<TrackSector>,
+    pub sector_bests: Vec<f64>,
+    pub lap_data_cache: Vec<LapData>,
+}
 
-    // Selected active Lap
-    pub selected_lap: Option<i32>,
+pub struct OpenDavApp {
+    pub app_state: AppState,
+    pub active_page: ActivePage,
+    pub active_worksheet: WorksheetTab,
+    pub session_loaded: bool,
+    pub active_file: Option<String>,
+    pub fade_value: f32, // Smooth UI fade-in animation tracker
+
+    pub sessions: Vec<LoadedSession>,
+    pub primary_session_idx: usize,
+
+    // Selected active Lap (Session Index, Lap Number)
+    pub selected_lap: Option<(usize, i32)>,
 
     // MoTeC Style Locked Playback Cursor Tracker (Time in seconds)
     pub cursor_x: Option<f64>,
@@ -66,9 +78,9 @@ pub struct OpenDavApp {
     pub is_highlight_active: bool,
     pub highlight_start: Option<f64>,
 
-    // --- MOTEC MULTI-LAP REFERENCE OVERLAY STATE ---
-    pub ref_lap_white: Option<i32>,
-    pub ref_lap_cyan: Option<i32>,
+    // --- MOTEC MULTI-LAP REFERENCE OVERLAY STATE (Session Index, Lap Number) ---
+    pub ref_lap_white: Option<(usize, i32)>,
+    pub ref_lap_cyan: Option<(usize, i32)>,
 
     // Shared horizontal view bounds to perfectly synchronize Zoom/Pan/Scroll across different tabs!
     pub visible_x_range: Option<(f64, f64)>,
@@ -76,15 +88,14 @@ pub struct OpenDavApp {
     // Tracks worksheet changes to execute tab-sync bounds on switch frames cleanly!
     pub previous_worksheet: Option<WorksheetTab>,
 
-    // Sector reports caches
-    pub sectors: Vec<TrackSector>,
-    pub sector_bests: Vec<f64>,
-    pub lap_data_cache: Vec<LapData>,
     pub show_graphs_track_map: bool,
     pub previous_page: Option<ActivePage>,
     pub previous_show_graphs_track_map: Option<bool>,
     pub show_sector_deltas: bool,
     pub sector_deltas: Vec<Option<f64>>,
+    
+    pub is_playing: bool,
+    pub playback_speed: f64,
 }
 
 impl Default for OpenDavApp {
@@ -95,19 +106,9 @@ impl Default for OpenDavApp {
             active_worksheet: WorksheetTab::Basic,
             session_loaded: false,
             active_file: None,
-            session: None,
             fade_value: 0.0,
-            front_pts_cache: Vec::new(),
-            rear_pts_cache: Vec::new(),
-            rake_pts_cache: Vec::new(),
-            speed_pts_cache: Vec::new(),
-            throttle_pts_cache: Vec::new(),
-            brake_pts_cache: Vec::new(),
-            steering_pts_cache: Vec::new(),
-            rpm_pts_cache: Vec::new(),
-            gear_pts_cache: Vec::new(),
-            lap_ranges: Vec::new(),
-            lap_markers: Vec::new(),
+            sessions: Vec::new(),
+            primary_session_idx: 0,
             selected_lap: None,
             cursor_x: None,
             reset_bounds_flag: false,
@@ -118,14 +119,13 @@ impl Default for OpenDavApp {
             ref_lap_cyan: None,
             visible_x_range: None,
             previous_worksheet: None,
-            sectors: Vec::new(),
-            sector_bests: Vec::new(),
-            lap_data_cache: Vec::new(),
             show_graphs_track_map: false,
             previous_page: None,
             previous_show_graphs_track_map: None,
             show_sector_deltas: false,
             sector_deltas: Vec::new(),
+            is_playing: false,
+            playback_speed: 1.0,
         }
     }
 }
@@ -153,12 +153,11 @@ impl OpenDavApp {
 
         Self::default()
     }
+}
 
-    // Precomputes and caches ALL points of the entire session plotted along relative SessionTime (seconds)
-    // Pre-scales and normalizes Y-axis values once on load to ensure absolute ZERO heap allocations in drawing hot-loop!
-    pub fn rebuild_points_cache(&mut self) {
-        if let Some(session) = &mut self.session {
-            let n = session.distance.len();
+impl LoadedSession {
+    pub fn new(file_name: String, mut session: crate::data::ibt_parser::IbtSession) -> Self {
+        let n = session.distance.len();
             
             // Build base points
             let mut front = Vec::with_capacity(n);
@@ -303,16 +302,6 @@ impl OpenDavApp {
 
             }
 
-            self.front_pts_cache = front;
-            self.rear_pts_cache = rear;
-            self.rake_pts_cache = rake;
-            self.speed_pts_cache = speed;
-            self.throttle_pts_cache = throttle;
-            self.brake_pts_cache = brake;
-            self.steering_pts_cache = steering;
-            self.rpm_pts_cache = rpm;
-            self.gear_pts_cache = gear;
-
             // 3. Precompute Lap Start/End Boundaries based on actual parsed lap numbers
             let mut markers = Vec::new();
             let mut ranges = Vec::new();
@@ -341,18 +330,15 @@ impl OpenDavApp {
                 }
             }
 
-            if ranges.is_empty() && !self.front_pts_cache.is_empty() {
-                let end_stint = self.front_pts_cache.last().unwrap()[0];
+            if ranges.is_empty() && !front.is_empty() {
+                let end_stint = front.last().unwrap()[0];
                 ranges.push((1, 0.0, end_stint));
                 markers.push(0.0);
             }
 
-            self.lap_markers = markers.clone();
-            self.lap_ranges = ranges;
-
             // Harmonize and write the physical transition lap list back to the session struct to maintain absolute app coherence!
             let mut sync_laps = Vec::new();
-            for &(lap_num, start_t, end_t) in &self.lap_ranges {
+            for &(lap_num, start_t, end_t) in &ranges {
                 let duration = end_t - start_t;
                 if duration > 1.0 {
                     sync_laps.push((lap_num, duration));
@@ -360,29 +346,10 @@ impl OpenDavApp {
             }
             session.lap_times = sync_laps;
 
-            // Default locked cursor to the fastest lap start on load!
-            if !self.front_pts_cache.is_empty() {
-                let max_time = self.front_pts_cache.last().unwrap()[0];
-                if let Some(sel_lap) = self.selected_lap {
-                    if let Some(pos) = self.lap_ranges.iter().position(|r| r.0 == sel_lap) {
-                        let (_, start_t, end_t) = self.lap_ranges[pos];
-                        self.cursor_x = Some(start_t);
-                        self.visible_x_range = Some((start_t, end_t));
-                    } else {
-                        self.cursor_x = Some(0.0);
-                        self.visible_x_range = Some((0.0, max_time));
-                    }
-                } else {
-                    self.cursor_x = Some(0.0);
-                    self.visible_x_range = Some((0.0, max_time));
-                }
-                self.reset_bounds_flag = true;
-            }
-
             // Rebuild lap data cache
             let mut data_cache = Vec::new();
             let mut unique_laps = Vec::new();
-            for &(lap_num, _, _) in &self.lap_ranges {
+            for &(lap_num, _, _) in &ranges {
                 unique_laps.push(lap_num);
             }
 
@@ -440,14 +407,14 @@ impl OpenDavApp {
                     });
                 }
             }
-            self.lap_data_cache = data_cache;
+            // removed self.lap_data_cache
 
             // Rebuild track sectors and sector bests cache using Signals Layer
-            self.sectors = detect_track_sectors(session);
+            let sectors_cache = detect_track_sectors(&session);
             
-            let mut bests = vec![f64::MAX; self.sectors.len()];
-            for (s_idx, sector) in self.sectors.iter().enumerate() {
-                for lap in &self.lap_data_cache {
+            let mut bests = vec![f64::MAX; sectors_cache.len()];
+            for (s_idx, sector) in sectors_cache.iter().enumerate() {
+                for lap in &data_cache {
                     if lap.lap_num > 3 {
                         let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
                         let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
@@ -458,7 +425,7 @@ impl OpenDavApp {
                     }
                 }
                 if bests[s_idx] == f64::MAX {
-                    for lap in &self.lap_data_cache {
+                    for lap in &data_cache {
                         let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
                         let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
                         let s_time = t_end - t_start;
@@ -468,23 +435,55 @@ impl OpenDavApp {
                     }
                 }
             }
-            self.sector_bests = bests;
-            self.update_sector_deltas();
+
+            LoadedSession {
+                file_name,
+                session,
+                front_pts_cache: front,
+                rear_pts_cache: rear,
+                rake_pts_cache: rake,
+                speed_pts_cache: speed,
+                throttle_pts_cache: throttle,
+                brake_pts_cache: brake,
+                steering_pts_cache: steering,
+                rpm_pts_cache: rpm,
+                gear_pts_cache: gear,
+                lap_ranges: ranges,
+                lap_markers: markers,
+                sectors: sectors_cache,
+                sector_bests: bests,
+                lap_data_cache: data_cache,
+            }
+        }
+    pub fn get_cache_slice(&self, name: &str) -> &[[f64; 2]] {
+        match name {
+            "Speed" => &self.speed_pts_cache,
+            "Engine RPM" => &self.rpm_pts_cache,
+            "Throttle" => &self.throttle_pts_cache,
+            "Brake" => &self.brake_pts_cache,
+            "Steering Angle" => &self.steering_pts_cache,
+            "Ride Height (F)" => &self.front_pts_cache,
+            "Ride Height (R)" => &self.rear_pts_cache,
+            "Rake Angle" => &self.rake_pts_cache,
+            _ => &[],
         }
     }
+}
 
+impl OpenDavApp {
     pub fn update_sector_deltas(&mut self) {
-        let ref_lap = self.ref_lap_cyan.or(self.ref_lap_white);
-        let active_lap_num = self.selected_lap.or_else(|| {
-            if let Some(session) = &self.session {
-                Some(crate::signals::processing::get_fastest_lap(&session.lap_times))
-            } else {
-                None
-            }
+        if self.sessions.is_empty() { return; }
+        let p_idx = self.primary_session_idx;
+        let loaded = &self.sessions[p_idx];
+
+        let ref_lap = self.ref_lap_cyan.or(self.ref_lap_white).map(|(_, lap)| lap);
+        let active_lap_num = self.selected_lap.map(|(_, lap)| lap).or_else(|| {
+            Some(crate::signals::processing::get_fastest_lap(&loaded.session.lap_times))
         });
+        
         self.sector_deltas = crate::signals::processing::recalculate_sector_deltas(
-            &self.lap_data_cache,
-            &self.sectors,
+            &loaded.lap_data_cache,
+            &loaded.sectors,
             active_lap_num,
             ref_lap,
         );
@@ -494,7 +493,7 @@ impl OpenDavApp {
 impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // --- DYNAMIC BRAND THEMING SWITCHER ---
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         let is_dark = style.visuals.dark_mode;
         
         if is_dark {
@@ -514,7 +513,7 @@ impl eframe::App for OpenDavApp {
             style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(235, 234, 233);
             style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 15));
         }
-        ctx.set_style(style);
+        ctx.set_global_style(style);
 
         match self.app_state {
             AppState::Splash { .. } => {
@@ -538,6 +537,37 @@ impl eframe::App for OpenDavApp {
                 if self.fade_value < 1.0 {
                     ctx.request_repaint();
                     self.fade_value += 0.02;
+                }
+
+                // Calculate smooth delta-time interpolation (if playback is active)
+                if self.is_playing {
+                    let dt = ctx.input(|i| i.stable_dt) as f64;
+                    
+                    if let Some((s_idx, lap_num)) = self.selected_lap {
+                        if s_idx < self.sessions.len() {
+                            let loaded = &self.sessions[s_idx];
+                            if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == lap_num) {
+                                let (_, start_t, end_t) = loaded.lap_ranges[pos];
+                                
+                                let mut current_t = self.cursor_x.unwrap_or(start_t);
+                                current_t += dt * self.playback_speed;
+                                
+                                // Seamless looping at the end of the selected lap
+                                if current_t > end_t {
+                                    current_t = start_t;
+                                }
+                                
+                                self.cursor_x = Some(current_t);
+                                ctx.request_repaint(); // Crucial for smooth playback
+                            } else {
+                                self.is_playing = false; // Failsafe
+                            }
+                        } else {
+                            self.is_playing = false; // Failsafe
+                        }
+                    } else {
+                        self.is_playing = false;
+                    }
                 }
 
                 self.draw_sidebar(ctx);

@@ -21,20 +21,23 @@ pub struct ChartLane<'a> {
 
 impl OpenDavApp {
     pub fn get_cache_slice(&self, selector: CacheSelector) -> &[[f64; 2]] {
+        if self.sessions.is_empty() { return &[]; }
+        let loaded = &self.sessions[self.primary_session_idx];
         match selector {
-            CacheSelector::Speed => &self.speed_pts_cache,
-            CacheSelector::RPM => &self.rpm_pts_cache,
-            CacheSelector::Throttle => &self.throttle_pts_cache,
-            CacheSelector::Brake => &self.brake_pts_cache,
-            CacheSelector::Steering => &self.steering_pts_cache,
-            CacheSelector::FrontHeight => &self.front_pts_cache,
-            CacheSelector::RearHeight => &self.rear_pts_cache,
-            CacheSelector::Rake => &self.rake_pts_cache,
+            CacheSelector::Speed => &loaded.speed_pts_cache,
+            CacheSelector::RPM => &loaded.rpm_pts_cache,
+            CacheSelector::Throttle => &loaded.throttle_pts_cache,
+            CacheSelector::Brake => &loaded.brake_pts_cache,
+            CacheSelector::Steering => &loaded.steering_pts_cache,
+            CacheSelector::FrontHeight => &loaded.front_pts_cache,
+            CacheSelector::RearHeight => &loaded.rear_pts_cache,
+            CacheSelector::Rake => &loaded.rake_pts_cache,
         }
     }
 
     pub fn get_raw_value(&self, selector: CacheSelector, idx: usize) -> f64 {
-        if let Some(session) = &self.session {
+        if !self.sessions.is_empty() {
+            let session = &self.sessions[self.primary_session_idx].session;
             match selector {
                 CacheSelector::Speed => {
                     session.dataframe.column("Speed").ok()
@@ -97,16 +100,18 @@ impl OpenDavApp {
     }
 
     pub fn draw_motec_plot(&mut self, ui: &mut egui::Ui, plot_id: &str, config: &WorksheetConfig, is_tab_switch: bool) {
-        if self.front_pts_cache.is_empty() { return; }
+        if self.sessions.is_empty() { return; }
+        let loaded = &self.sessions[self.primary_session_idx];
+        if loaded.front_pts_cache.is_empty() { return; }
         
-        let max_time = self.front_pts_cache.last().unwrap()[0];
+        let max_time = loaded.front_pts_cache.last().unwrap()[0];
         let is_dark = ui.style().visuals.dark_mode;
 
         // 1. EXTRACT RAW HUD METRICS AT PLAYBACK CURSOR INDEX (EXCLUSIVE ZERO-CONFLICT SCOPE!)
         let mut idx = 0;
         let mut has_cursor = false;
         if let Some(cx) = self.cursor_x {
-            idx = get_closest_index(&self.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
+            idx = get_closest_index(&loaded.speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
             has_cursor = true;
         }
 
@@ -190,10 +195,10 @@ impl OpenDavApp {
         let mut highlight_start = self.highlight_start;
         
         let selected_lap = self.selected_lap;
-        let lap_ranges = &self.lap_ranges;
+        let lap_ranges = &loaded.lap_ranges;
         let ref_lap_cyan = self.ref_lap_cyan;
         let ref_lap_white = self.ref_lap_white;
-        let lap_markers = &self.lap_markers;
+        let lap_markers = &loaded.lap_markers;
 
         plot.show(ui, |plot_ui| {
 
@@ -210,7 +215,7 @@ impl OpenDavApp {
             // A. HANDLE VIEWPORT SYNC & LAP FOCUSING
             if reset_bounds_flag || is_tab_switch {
                 if let Some(sel_lap) = selected_lap {
-                    if let Some(pos) = lap_ranges.iter().position(|r| r.0 == sel_lap) {
+                    if let Some(pos) = lap_ranges.iter().position(|r| r.0 == sel_lap.1 && sel_lap.0 == self.primary_session_idx) {
                         let (_, start_t, end_t) = lap_ranges[pos];
                         let end_time_focus = end_t; // EXACT PRECOMPUTED END TIME OF CURRENT LAP!
                         if is_tab_switch && visible_x_range.is_some() {
@@ -300,9 +305,10 @@ impl OpenDavApp {
 
             // F. DRAW DYNAMIC MOTEC MULTI-LAP REFERENCE OVERLAYS
             // Cyan reference overlays
-            if let Some(ref_lap_num) = ref_lap_cyan {
-                if let Some(pos) = lap_ranges.iter().position(|r| r.0 == ref_lap_num) {
-                    let ref_start = lap_ranges[pos].1;
+            if let Some((s_idx, ref_lap_num)) = ref_lap_cyan {
+                let ref_session = &self.sessions[s_idx];
+                if let Some(pos) = ref_session.lap_ranges.iter().position(|r| r.0 == ref_lap_num) {
+                    let ref_start = ref_session.lap_ranges[pos].1;
                     
                     for &(lap_num, start_t, end_t) in lap_ranges {
                         if end_t >= min_visible_x && start_t <= max_visible_x {
@@ -310,12 +316,15 @@ impl OpenDavApp {
                             
                             for lane in &lanes {
                                 for trace in &lane.traces {
-                                    let ref_slice = get_lap_points_slice(lap_ranges, trace.scaled_pts, ref_lap_num);
-                                    if !ref_slice.is_empty() {
-                                        let shifted: Vec<[f64; 2]> = ref_slice.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                        let dec_ref = decimate_points(&shifted);
-                                        let cyan_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 136, 170) };
-                                        plot_ui.line(Line::new(format!("CyanRef_{}_{}", trace.name, lap_num), dec_ref).color(cyan_color).width(1.2));
+                                    let ref_pts = ref_session.get_cache_slice(&trace.name);
+                                    if !ref_pts.is_empty() {
+                                        let ref_slice = get_lap_points_slice(&ref_session.lap_ranges, ref_pts, ref_lap_num);
+                                        if !ref_slice.is_empty() {
+                                            let shifted: Vec<[f64; 2]> = ref_slice.iter().map(|p| [p[0] + offset, p[1]]).collect();
+                                            let dec_ref = decimate_points(&shifted);
+                                            let cyan_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 136, 170) };
+                                            plot_ui.line(Line::new(format!("CyanRef_{}_{}", trace.name, lap_num), dec_ref).color(cyan_color).width(1.2));
+                                        }
                                     }
                                 }
                             }
@@ -325,9 +334,10 @@ impl OpenDavApp {
             }
 
             // White reference overlays
-            if let Some(ref_lap_num) = ref_lap_white {
-                if let Some(pos) = lap_ranges.iter().position(|r| r.0 == ref_lap_num) {
-                    let ref_start = lap_ranges[pos].1;
+            if let Some((s_idx, ref_lap_num)) = ref_lap_white {
+                let ref_session = &self.sessions[s_idx];
+                if let Some(pos) = ref_session.lap_ranges.iter().position(|r| r.0 == ref_lap_num) {
+                    let ref_start = ref_session.lap_ranges[pos].1;
                     
                     for &(lap_num, start_t, end_t) in lap_ranges {
                         if end_t >= min_visible_x && start_t <= max_visible_x {
@@ -335,11 +345,14 @@ impl OpenDavApp {
                             
                             for lane in &lanes {
                                 for trace in &lane.traces {
-                                    let ref_slice = get_lap_points_slice(lap_ranges, trace.scaled_pts, ref_lap_num);
-                                    if !ref_slice.is_empty() {
-                                        let shifted: Vec<[f64; 2]> = ref_slice.iter().map(|p| [p[0] + offset, p[1]]).collect();
-                                        let dec_ref = decimate_points(&shifted);
-                                        plot_ui.line(Line::new(format!("WhiteRef_{}_{}", trace.name, lap_num), dec_ref).color(egui::Color32::WHITE).width(1.2));
+                                    let ref_pts = ref_session.get_cache_slice(&trace.name);
+                                    if !ref_pts.is_empty() {
+                                        let ref_slice = get_lap_points_slice(&ref_session.lap_ranges, ref_pts, ref_lap_num);
+                                        if !ref_slice.is_empty() {
+                                            let shifted: Vec<[f64; 2]> = ref_slice.iter().map(|p| [p[0] + offset, p[1]]).collect();
+                                            let dec_ref = decimate_points(&shifted);
+                                            plot_ui.line(Line::new(format!("WhiteRef_{}_{}", trace.name, lap_num), dec_ref).color(egui::Color32::WHITE).width(1.2));
+                                        }
                                     }
                                 }
                             }
@@ -392,7 +405,8 @@ impl OpenDavApp {
             // J. DRAW PLAYBACK CURSOR DOTS
             if let Some(cx) = cursor_x {
                 plot_ui.vline(VLine::new("Cursor Line", cx).color(ACCENT_COLOR).width(1.5));
-                let idx = get_closest_index(&self.front_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
+                let p_idx = self.primary_session_idx;
+                let idx = get_closest_index(&self.sessions[p_idx].front_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
                 
                 for lane in &lanes {
                     for trace in &lane.traces {
