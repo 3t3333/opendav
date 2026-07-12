@@ -21,8 +21,22 @@ impl OpenDavApp {
         let session_ref = &self.sessions[self.primary_session_idx].session;
         let car = session_ref.car.clone();
         let venue = session_ref.venue.clone();
-        let air_temp = session_ref.air_temp.clone();
-        let surface_temp = session_ref.surface_temp.clone();
+        let mut air_temp = session_ref.air_temp.clone();
+        let mut surface_temp = session_ref.surface_temp.clone();
+
+        if !self.settings.use_metric {
+            let convert_temp = |s: &str| -> String {
+                if let Some(val_str) = s.strip_suffix(" C") {
+                    if let Ok(c) = val_str.parse::<f64>() {
+                        let f = c * 9.0 / 5.0 + 32.0;
+                        return format!("{:.2} F", f);
+                    }
+                }
+                s.to_string()
+            };
+            air_temp = convert_temp(&air_temp);
+            surface_temp = convert_temp(&surface_temp);
+        }
         let total_session_time = session_ref.total_session_time;
         let lap_times = session_ref.lap_times.clone();
 
@@ -118,7 +132,7 @@ impl OpenDavApp {
                             
                             let mut row_text = format!("Lap {} : {}", lap_num, format_lap_time(*duration));
                             if is_fastest {
-                                row_text += " ★ FASTEST";
+                                row_text += " FASTEST";
                             }
                             
                             let row_color = if is_selected {
@@ -196,7 +210,8 @@ impl OpenDavApp {
             tab_style.spacing.button_padding = egui::vec2(12.0, 8.0); // Perfect, professional tab sizing
 
             ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Basic, "1. Basic (Inputs)");
-            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DynamicRake, "2. Dynamic Rake");
+            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::BasicVehicle, "2. Basic Vehicle");
+            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DynamicRake, "3. Dynamic Rake");
         });
 
         ui.add_space(10.0);
@@ -221,43 +236,27 @@ impl OpenDavApp {
         // 2. ACTIVE WORKSHEET PLOTTING AREA (SINGLE INTEGRATED HIGH-PERFORMANCE PLOT ENVIRONMENT!)
         let config = match self.active_worksheet {
             WorksheetTab::Basic => Some(WorksheetConfig::basic()),
+            WorksheetTab::BasicVehicle => Some(WorksheetConfig::basic_vehicle()),
             WorksheetTab::DynamicRake => Some(WorksheetConfig::rake()),
             _ => None,
         };
 
-        if self.show_graphs_track_map {
-            let total_h = ui.available_height();
-            let half_h = (total_h - 20.0) / 2.0;
+        // MANUAL RESIZER (Bypasses TopBottomPanel bugs with egui::Plot)
+        let mut track_map_height = ui.ctx().data_mut(|d| d.get_temp::<f32>(egui::Id::new("tm_h")).unwrap_or(300.0));
+        let max_h = ui.available_height() - 150.0;
+        track_map_height = track_map_height.clamp(150.0, max_h.max(150.0));
 
-            ui.allocate_ui(egui::vec2(ui.available_width(), half_h), |ui| {
-                if let Some(cfg) = &config {
-                    let canvas_id = match self.active_worksheet {
-                        WorksheetTab::Basic => "basic_worksheet_canvas",
-                        _ => "rake_worksheet_canvas",
-                    };
-                    self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("Worksheet Active").heading().color(ACCENT_COLOR));
-                            ui.label(egui::RichText::new("D3 D&D replacement plotters are standing by for this section...").color(egui::Color32::GRAY));
-                            ui.label(egui::RichText::new("(Phase 2 Rewrite Roadmap placeholder)").small().color(egui::Color32::DARK_GRAY));
-                        });
-                    });
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            ui.group(|ui| {
-                self.draw_interactive_track_map(ui, half_h - 10.0);
-            });
+        let graphs_height = if self.show_graphs_track_map {
+            (ui.available_height() - track_map_height - 8.0).max(100.0)
         } else {
+            ui.available_height()
+        };
+
+        ui.allocate_ui(egui::vec2(ui.available_width(), graphs_height), |ui| {
             if let Some(cfg) = &config {
                 let canvas_id = match self.active_worksheet {
                     WorksheetTab::Basic => "basic_worksheet_canvas",
+                    WorksheetTab::BasicVehicle => "basic_vehicle_worksheet_canvas",
                     _ => "rake_worksheet_canvas",
                 };
                 self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);
@@ -270,6 +269,33 @@ impl OpenDavApp {
                     });
                 });
             }
+        });
+
+        if self.show_graphs_track_map {
+            ui.add_space(2.0);
+            let resizer = ui.allocate_response(egui::vec2(ui.available_width(), 4.0), egui::Sense::drag());
+            
+            // Draw a subtle line for the splitter
+            let rect = resizer.rect;
+            let visual_color = if resizer.hovered() || resizer.dragged() {
+                egui::Color32::from_rgb(100, 150, 255)
+            } else {
+                egui::Color32::from_rgb(80, 80, 80)
+            };
+            ui.painter().rect_filled(rect, 0.0, visual_color);
+
+            if resizer.dragged() {
+                track_map_height -= resizer.drag_delta().y;
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("tm_h"), track_map_height));
+            }
+            if resizer.hovered() || resizer.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
+            ui.add_space(2.0);
+            
+            ui.allocate_ui(egui::vec2(ui.available_width(), track_map_height), |ui| {
+                self.draw_interactive_track_map(ui, track_map_height);
+            });
         }
     }
 
@@ -284,17 +310,21 @@ impl OpenDavApp {
             return;
         }
 
-        let venue = self.sessions[self.primary_session_idx].session.venue.clone();
-
         ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("Sector Analysis Report").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(venue.to_uppercase()).strong().color(ACCENT_COLOR));
-            });
+            let tab_style = ui.style_mut();
+            tab_style.spacing.button_padding = egui::vec2(12.0, 8.0);
+
+            ui.selectable_value(&mut self.active_reports_tab, crate::ReportsTab::SectorAnalysis, "1. Sector Analysis");
+            ui.selectable_value(&mut self.active_reports_tab, crate::ReportsTab::TimingGraphs, "2. Timing Graphs");
+            
+
         });
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
+
+        match self.active_reports_tab {
+            crate::ReportsTab::SectorAnalysis => {
 
         let has_data = {
             let loaded = &self.sessions[self.primary_session_idx];
@@ -350,23 +380,31 @@ impl OpenDavApp {
                                             let is_session_best = s_time > 0.0 && (s_time - best_s_time).abs() < 1e-4;
                                             let is_near_best = s_time > 0.0 && s_time <= best_s_time * 1.015;
 
-                                            let cell_color = if is_session_best {
-                                                if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) }
+                                            let (bg_color, text_color) = if is_session_best {
+                                                (egui::Color32::from_rgb(128, 0, 128), egui::Color32::WHITE) // Purple background
                                             } else if is_near_best {
-                                                if is_dark { egui::Color32::from_rgb(120, 220, 120) } else { egui::Color32::from_rgb(34, 112, 34) }
+                                                (egui::Color32::from_rgb(34, 139, 34), egui::Color32::WHITE) // Green background
                                             } else {
-                                                if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }
+                                                (egui::Color32::BLACK, egui::Color32::WHITE) // Normal black background
                                             };
 
-                                            let mut text = egui::RichText::new(format_sector_time(s_time)).color(cell_color);
-                                            if is_session_best || is_near_best {
-                                                text = text.strong();
-                                            }
-                                            ui.label(text);
+                                            egui::Frame::none()
+                                                .fill(bg_color)
+                                                .corner_radius(4.0)
+                                                .inner_margin(egui::vec2(6.0, 4.0))
+                                                .show(ui, |ui| {
+                                                    ui.label(egui::RichText::new(format_sector_time(s_time)).color(text_color).strong());
+                                                });
                                         }
 
-                                        let opt_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
-                                        ui.label(egui::RichText::new(format_sector_time(best_s_time)).color(opt_color).strong());
+                                        let opt_bg = egui::Color32::from_rgb(128, 0, 128);
+                                        egui::Frame::none()
+                                            .fill(opt_bg)
+                                            .corner_radius(4.0)
+                                            .inner_margin(egui::vec2(6.0, 4.0))
+                                            .show(ui, |ui| {
+                                                ui.label(egui::RichText::new(format_sector_time(best_s_time)).color(egui::Color32::WHITE).strong());
+                                            });
                                         ui.end_row();
                                     }
 
@@ -378,37 +416,52 @@ impl OpenDavApp {
                                         let is_total_best = total_time > 0.0 && (total_time - best_total_time).abs() < 1e-4;
                                         let is_total_near_best = total_time > 0.0 && total_time <= best_total_time * 1.015;
 
-                                        let total_color = if is_total_best {
-                                            if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) }
+                                        let (bg_color, text_color) = if is_total_best {
+                                            (egui::Color32::from_rgb(128, 0, 128), egui::Color32::WHITE)
                                         } else if is_total_near_best {
-                                            if is_dark { egui::Color32::from_rgb(120, 220, 120) } else { egui::Color32::from_rgb(34, 112, 34) }
+                                            (egui::Color32::from_rgb(34, 139, 34), egui::Color32::WHITE)
                                         } else {
-                                            if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                                            (egui::Color32::BLACK, egui::Color32::WHITE)
                                         };
 
-                                        let mut text = egui::RichText::new(format_lap_time(total_time)).color(total_color);
-                                        if is_total_best || is_total_near_best {
-                                            text = text.strong();
-                                        }
-                                        ui.label(text);
+                                        egui::Frame::none()
+                                            .fill(bg_color)
+                                            .corner_radius(4.0)
+                                            .inner_margin(egui::vec2(6.0, 4.0))
+                                            .show(ui, |ui| {
+                                                ui.label(egui::RichText::new(format_lap_time(total_time)).color(text_color).strong());
+                                            });
                                     }
 
                                     let optimal_total = loaded.sector_bests.iter().sum::<f64>();
-                                    let opt_total_color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
-                                    ui.label(egui::RichText::new(format_lap_time(optimal_total)).color(opt_total_color).strong());
+                                    let opt_bg = egui::Color32::from_rgb(128, 0, 128);
+                                    egui::Frame::none()
+                                        .fill(opt_bg)
+                                        .corner_radius(4.0)
+                                        .inner_margin(egui::vec2(6.0, 4.0))
+                                        .show(ui, |ui| {
+                                            ui.label(egui::RichText::new(format_lap_time(optimal_total)).color(egui::Color32::WHITE).strong());
+                                        });
                                     ui.end_row();
                                 });
                         });
                 });
 
                 cols[1].vertical(|ui| {
-                    ui.heading(egui::RichText::new("Track Layout Map").strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                    let venue_name = self.sessions[self.primary_session_idx].session.venue.to_uppercase();
+                    ui.heading(egui::RichText::new(venue_name).strong().color(crate::config::worksheet::ACCENT_COLOR));
                     ui.add_space(8.0);
                     ui.group(|ui| {
                         self.draw_interactive_track_map(ui, 450.0);
                     });
                 });
             });
+            }
+        }
+        crate::ReportsTab::TimingGraphs => {
+            self.draw_timing_graphs_page(ui, is_dark);
+        }
         }
     }
 }
+

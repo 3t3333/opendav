@@ -3,6 +3,7 @@ pub mod signals;
 pub mod config;
 pub mod rendering;
 pub mod ui;
+pub mod simgit;
 
 use crate::config::worksheet::{WorksheetTab, WorksheetConfig, ACCENT_COLOR, DARK_BG_COLOR, LIGHT_BG_COLOR};
 use crate::signals::processing::{
@@ -14,6 +15,21 @@ pub enum ActivePage {
     OpenDav,  // Main Dashboard
     Graphs,   // Telemetry Plots
     Reports,  // Sector Reports
+    SimGit,   // Version Control & Workspaces
+    Settings, // Application Settings
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum SimGitTab {
+    Dashboard,
+    Setups,
+    Cloud,
+}
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum ReportsTab {
+    SectorAnalysis,
+    TimingGraphs,
 }
 
 #[derive(Clone, Debug)]
@@ -31,6 +47,8 @@ pub struct LoadedSession {
     pub rear_pts_cache: Vec<[f64; 2]>,
     pub rake_pts_cache: Vec<[f64; 2]>,
     pub speed_pts_cache: Vec<[f64; 2]>,
+    pub lat_g_pts_cache: Vec<[f64; 2]>,
+    pub long_g_pts_cache: Vec<[f64; 2]>,
 
     // Basic Driver Inputs Caches
     pub throttle_pts_cache: Vec<[f64; 2]>,
@@ -41,6 +59,9 @@ pub struct LoadedSession {
 
     // Precomputed Lap boundary start/end time markers (relative to stint start in seconds)
     pub lap_ranges: Vec<(i32, f64, f64)>,
+
+    // Map cache index to raw dataframe index to maintain correct time alignment for tooltips
+    pub cache_to_df_index: Vec<usize>,
 
     // Precomputed Lap start timestamps (relative to stint start in seconds) for dotted red line dividers
     pub lap_markers: Vec<f64>,
@@ -55,6 +76,7 @@ pub struct OpenDavApp {
     pub app_state: AppState,
     pub active_page: ActivePage,
     pub active_worksheet: WorksheetTab,
+    pub active_reports_tab: ReportsTab,
     pub session_loaded: bool,
     pub active_file: Option<String>,
     pub fade_value: f32, // Smooth UI fade-in animation tracker
@@ -92,10 +114,32 @@ pub struct OpenDavApp {
     pub previous_page: Option<ActivePage>,
     pub previous_show_graphs_track_map: Option<bool>,
     pub show_sector_deltas: bool,
+    pub show_chart_deltas: bool,
     pub sector_deltas: Vec<Option<f64>>,
+    
+    pub show_all_splits: bool,
+    pub hidden_splits: std::collections::HashSet<String>,
+    
+    // Timing Graphs state
+    pub filter_large_sectors: bool,
     
     pub is_playing: bool,
     pub playback_speed: f64,
+
+    // SimGit State
+    pub simgit_manager: crate::simgit::manager::SimGitManager,
+    pub simgit_prev_setup: Option<std::path::PathBuf>,
+    pub simgit_new_setup: Option<std::path::PathBuf>,
+    pub simgit_diff: Option<crate::simgit::diff::SetupDiff>,
+    pub simgit_active_tab: SimGitTab,
+    pub simgit_new_ws_name: String,
+    pub show_new_ws_popup: bool,
+    
+    // Cached JSON track map segments for SimGit Dashboard Cards
+    pub simgit_track_maps: std::collections::HashMap<i32, Vec<Vec<[f64; 2]>>>,
+
+    // Application Settings
+    pub settings: crate::config::settings::AppSettings,
 }
 
 impl Default for OpenDavApp {
@@ -104,6 +148,7 @@ impl Default for OpenDavApp {
             app_state: AppState::Splash { progress: 0.0 },
             active_page: ActivePage::OpenDav,
             active_worksheet: WorksheetTab::Basic,
+            active_reports_tab: ReportsTab::SectorAnalysis,
             session_loaded: false,
             active_file: None,
             fade_value: 0.0,
@@ -123,9 +168,22 @@ impl Default for OpenDavApp {
             previous_page: None,
             previous_show_graphs_track_map: None,
             show_sector_deltas: false,
+            show_chart_deltas: false,
             sector_deltas: Vec::new(),
+            show_all_splits: true,
+            hidden_splits: std::collections::HashSet::new(),
+            filter_large_sectors: true,
             is_playing: false,
             playback_speed: 1.0,
+            simgit_manager: crate::simgit::manager::SimGitManager::new(std::path::PathBuf::from("workspace")),
+            simgit_prev_setup: None,
+            simgit_new_setup: None,
+            simgit_diff: None,
+            simgit_active_tab: SimGitTab::Dashboard,
+            simgit_new_ws_name: String::new(),
+            show_new_ws_popup: false,
+            simgit_track_maps: std::collections::HashMap::new(),
+            settings: crate::config::settings::AppSettings::default(),
         }
     }
 }
@@ -134,6 +192,15 @@ impl OpenDavApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Install image loaders
         egui_extras::install_image_loaders(&_cc.egui_ctx);
+
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "DIN1451".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/fonts/din-1451/DINMittelschriftStd.otf"))),
+        );
+        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "DIN1451".to_owned());
+        fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "DIN1451".to_owned());
+        _cc.egui_ctx.set_fonts(fonts);
 
         let mut style = egui::Style::default();
         style.visuals = egui::Visuals::dark(); 
@@ -151,12 +218,20 @@ impl OpenDavApp {
 
         _cc.egui_ctx.set_style(style);
 
-        Self::default()
+        let mut app = Self::default();
+        app.settings = crate::config::settings::AppSettings::load();
+        
+        // Ensure egui matches our loaded dark mode preference
+        if !app.settings.dark_mode {
+            _cc.egui_ctx.set_visuals(egui::Visuals::light());
+        }
+        
+        app
     }
 }
 
 impl LoadedSession {
-    pub fn new(file_name: String, mut session: crate::data::ibt_parser::IbtSession) -> Self {
+    pub fn new(file_name: String, mut session: crate::data::ibt_parser::IbtSession, corner_merge_threshold: f64) -> Self {
         let n = session.distance.len();
             
             // Build base points
@@ -169,6 +244,9 @@ impl LoadedSession {
             let mut steering = Vec::with_capacity(n);
             let mut rpm = Vec::with_capacity(n);
             let mut gear = Vec::with_capacity(n);
+            let mut latg = Vec::with_capacity(n);
+            let mut longg = Vec::with_capacity(n);
+            let mut cache_to_df_index = Vec::with_capacity(n);
 
             let time_col = session.dataframe.column("SessionTime").unwrap().f64().unwrap();
             let session_start = time_col.get(0).unwrap_or(0.0);
@@ -180,6 +258,8 @@ impl LoadedSession {
             let steering_col = session.dataframe.column("SteeringWheelAngle").ok().map(|c| c.f64().ok()).flatten();
             let rpm_col = session.dataframe.column("RPM").ok().map(|c| c.f64().ok()).flatten();
             let gear_col = session.dataframe.column("Gear").ok().map(|c| c.f64().ok()).flatten();
+            let latg_col = session.dataframe.column("LatAccel").ok().map(|c| c.f64().ok()).flatten();
+            let longg_col = session.dataframe.column("LongAccel").ok().map(|c| c.f64().ok()).flatten();
 
             let is_on_track_col = session.dataframe.column("IsOnTrack").ok().map(|c| c.f64().ok()).flatten();
             let in_pit_stall_col = session.dataframe.column("PlayerCarInPitStall").ok().map(|c| c.f64().ok()).flatten();
@@ -192,6 +272,8 @@ impl LoadedSession {
                 if is_on_track < 1.0 || in_pit_stall > 0.0 {
                     continue; // Skip off-track or pit stall samples cleanly!
                 }
+                
+                cache_to_df_index.push(i);
 
                 let s_time = time_col.get(i).unwrap_or(0.0);
                 let rel_time = s_time - session_start;
@@ -217,6 +299,12 @@ impl LoadedSession {
 
                 let raw_gear = gear_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
                 gear.push([rel_time, raw_gear]);
+                
+                let raw_latg = latg_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) / 9.80665; // convert m/s2 to G
+                latg.push([rel_time, raw_latg]);
+                
+                let raw_longg = longg_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) / 9.80665; // convert m/s2 to G
+                longg.push([rel_time, raw_longg]);
             }
 
             // 2. Precompute mathematical dynamic scaling factors across the whole stint to map into stacked Lanes:
@@ -286,6 +374,20 @@ impl LoadedSession {
                 12.0 + pct * (36.0 - 12.0)
             };
 
+            let min_latg = latg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+            let max_latg = latg.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+            let min_longg = longg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+            let max_longg = longg.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+            let min_g = f64::min(min_latg, min_longg);
+            let max_g = f64::max(max_latg, max_longg);
+            let pad_g = (max_g - min_g) * 0.1;
+            
+            let scale_g = |val: f64| -> f64 {
+                if max_g == min_g { return 25.0; }
+                let pct = ((val - (min_g - pad_g)) / ((max_g + pad_g) - (min_g - pad_g))).clamp(0.0, 1.0);
+                10.0 + pct * (40.0 - 10.0)
+            };
+
             // Scale and store normalized curves directly in place inside cache!
             let cached_len = front.len();
             for i in 0..cached_len {
@@ -299,7 +401,8 @@ impl LoadedSession {
                 steering[i][1] = scale_steering(steering[i][1]);
                 rpm[i][1] = scale_rpm(rpm[i][1]);
                 gear[i][1] = scale_speed(gear[i][1]); // Gear utilizes Speed lane vertically
-
+                latg[i][1] = scale_g(latg[i][1]);
+                longg[i][1] = scale_g(longg[i][1]);
             }
 
             // 3. Precompute Lap Start/End Boundaries based on actual parsed lap numbers
@@ -410,7 +513,7 @@ impl LoadedSession {
             // removed self.lap_data_cache
 
             // Rebuild track sectors and sector bests cache using Signals Layer
-            let sectors_cache = detect_track_sectors(&session);
+            let sectors_cache = detect_track_sectors(&session, corner_merge_threshold);
             
             let mut bests = vec![f64::MAX; sectors_cache.len()];
             for (s_idx, sector) in sectors_cache.iter().enumerate() {
@@ -443,6 +546,8 @@ impl LoadedSession {
                 rear_pts_cache: rear,
                 rake_pts_cache: rake,
                 speed_pts_cache: speed,
+                lat_g_pts_cache: latg,
+                long_g_pts_cache: longg,
                 throttle_pts_cache: throttle,
                 brake_pts_cache: brake,
                 steering_pts_cache: steering,
@@ -450,6 +555,7 @@ impl LoadedSession {
                 gear_pts_cache: gear,
                 lap_ranges: ranges,
                 lap_markers: markers,
+                cache_to_df_index,
                 sectors: sectors_cache,
                 sector_bests: bests,
                 lap_data_cache: data_cache,
@@ -458,15 +564,36 @@ impl LoadedSession {
     pub fn get_cache_slice(&self, name: &str) -> &[[f64; 2]] {
         match name {
             "Speed" => &self.speed_pts_cache,
-            "Engine RPM" => &self.rpm_pts_cache,
+            "Lat G" | "Lateral G" => &self.lat_g_pts_cache,
+            "Long G" | "Longitudinal G" => &self.long_g_pts_cache,
+            "Engine RPM" | "RPM" => &self.rpm_pts_cache,
             "Throttle" => &self.throttle_pts_cache,
             "Brake" => &self.brake_pts_cache,
             "Steering Angle" => &self.steering_pts_cache,
-            "Ride Height (F)" => &self.front_pts_cache,
-            "Ride Height (R)" => &self.rear_pts_cache,
-            "Rake Angle" => &self.rake_pts_cache,
+            "Ride Height (F)" | "Front Height" | "Front RH" => &self.front_pts_cache,
+            "Ride Height (R)" | "Rear Height" | "Rear RH" => &self.rear_pts_cache,
+            "Rake Angle" | "Dynamic Rake" => &self.rake_pts_cache,
             _ => &[],
         }
+    }
+
+    pub fn recalculate_sectors(&mut self, threshold: f64) {
+        self.sectors = detect_track_sectors(&self.session, threshold);
+        
+        let mut bests = vec![f64::MAX; self.sectors.len()];
+        for (s_idx, sector) in self.sectors.iter().enumerate() {
+            for lap in &self.lap_data_cache {
+                if lap.lap_num > 3 {
+                    let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
+                    let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
+                    let s_time = t_end - t_start;
+                    if s_time > 0.0 && s_time < bests[s_idx] {
+                        bests[s_idx] = s_time;
+                    }
+                }
+            }
+        }
+        self.sector_bests = bests;
     }
 }
 
@@ -494,7 +621,15 @@ impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // --- DYNAMIC BRAND THEMING SWITCHER ---
         let mut style = (*ctx.global_style()).clone();
-        let is_dark = style.visuals.dark_mode;
+        
+        // Sync egui's global theme memory with our settings
+        let egui_is_dark = style.visuals.dark_mode;
+        if egui_is_dark != self.settings.dark_mode {
+            self.settings.dark_mode = egui_is_dark;
+            self.settings.save();
+        }
+        
+        let is_dark = self.settings.dark_mode;
         
         if is_dark {
             style.visuals.window_fill = DARK_BG_COLOR;
@@ -587,6 +722,12 @@ impl eframe::App for OpenDavApp {
                         ActivePage::Reports => {
                             self.draw_reports_page(ui, is_dark);
                         }
+                        ActivePage::SimGit => {
+                            self.draw_simgit_page(ui, is_dark);
+                        }
+                        ActivePage::Settings => {
+                            self.draw_settings_page(ui, is_dark);
+                        }
                     }
                 });
             }
@@ -598,7 +739,7 @@ impl eframe::App for OpenDavApp {
 
 fn main() -> eframe::Result<()> {
     // Load window icon from assets
-    let icon_bytes = include_bytes!("../assets/icon.png");
+    let icon_bytes = include_bytes!("../assets/logo_transparent_orangetext.png");
     let icon_data = if let Ok(img) = image::load_from_memory(icon_bytes) {
         let rgba = img.to_rgba8();
         let (width, height) = rgba.dimensions();
@@ -631,3 +772,36 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| Ok(Box::new(OpenDavApp::new(cc)))),
     )
 }
+
+impl OpenDavApp {
+    pub fn load_telemetry_file(&mut self, path: &std::path::Path) {
+        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+        self.active_file = Some(file_name.clone());
+        match crate::data::ibt_parser::parse_ibt_file(path.to_str().unwrap()) {
+            Ok(parsed_session) => {
+                self.session_loaded = true;
+                crate::signals::processing::trigger_track_map_download(parsed_session.track_id);
+                
+                let new_session = crate::LoadedSession::new(file_name, parsed_session, self.settings.corner_merge_threshold);
+                self.sessions.push(new_session);
+                
+                let new_idx = self.sessions.len() - 1;
+                self.primary_session_idx = new_idx;
+                
+                let fastest = crate::signals::processing::get_fastest_lap(&self.sessions[new_idx].session.lap_times);
+                self.selected_lap = if fastest > 0 { Some((new_idx, fastest)) } else { None };
+                
+                self.cursor_x = None;
+                self.update_sector_deltas();
+                self.reset_bounds_flag = true;
+                
+                // Automatically switch to Dashboard if loaded successfully
+                self.active_page = ActivePage::OpenDav;
+            }
+            Err(e) => {
+                eprintln!("Error parsing .ibt file: {}", e);
+            }
+        }
+    }
+}
+

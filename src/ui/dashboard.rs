@@ -14,29 +14,57 @@ impl OpenDavApp {
             let size = ui.available_size();
             
             // Center the logo and loading bar vertically and horizontally
-            let logo_width = 550.0;
-            let logo_height = logo_width * (1440.0 / 2560.0); // 2560x1440 ratio
-            
-            let group_height = logo_height + 40.0 + 4.0;
+            let logo2_width = 550.0;
+            let logo2_height = logo2_width * (1440.0 / 2560.0); // 2560x1440 ratio
+            let group_height = logo2_height + 40.0 + 4.0;
             let start_y = (size.y - group_height) / 2.0;
             
-            let logo_rect = egui::Rect::from_min_size(
-                egui::pos2((size.x - logo_width) / 2.0, start_y),
-                egui::vec2(logo_width, logo_height)
+            let logo2_rect = egui::Rect::from_min_size(
+                egui::pos2((size.x - logo2_width) / 2.0, start_y),
+                egui::vec2(logo2_width, logo2_height)
+            );
+
+            let logo1_width = 300.0;
+            let logo1_rect = egui::Rect::from_center_size(
+                logo2_rect.center(),
+                egui::vec2(logo1_width, logo1_width)
             );
             
-            let logo_bytes = include_bytes!("../../assets/transparent_full_opendav_logo.png");
+            let logo1_bytes = include_bytes!("../../assets/logo_transparent_lighttext.png");
+            let logo2_bytes = include_bytes!("../../assets/opendav_transparent_lighttext.png");
             
-            ui.put(
-                logo_rect,
-                egui::Image::from_bytes("bytes://transparent_full_opendav_logo.png", logo_bytes.to_vec())
-            );
+            // Fading logic based on progress (0.0 to 1.0)
+            let alpha1 = if progress < 0.45 {
+                1.0 - (progress / 0.45)
+            } else {
+                0.0
+            };
+            
+            let alpha2 = if progress > 0.55 {
+                (progress - 0.55) / 0.45
+            } else {
+                0.0
+            };
+            
+            if alpha1 > 0.0 {
+                let img = egui::Image::from_bytes("bytes://logo_transparent_lighttext_splash.png", logo1_bytes.to_vec())
+                    .show_loading_spinner(false)
+                    .tint(egui::Color32::from_white_alpha((alpha1 * 255.0) as u8));
+                ui.put(logo1_rect, img);
+            }
+            
+            if alpha2 > 0.0 {
+                let img = egui::Image::from_bytes("bytes://opendav_transparent_lighttext_splash.png", logo2_bytes.to_vec())
+                    .show_loading_spinner(false)
+                    .tint(egui::Color32::from_white_alpha((alpha2 * 255.0) as u8));
+                ui.put(logo2_rect, img);
+            }
             
             // Draw the loading progress bar underneath the logo
             let bar_width = 300.0;
             let bar_height = 3.0; // Thin and elegant
             let bar_rect = egui::Rect::from_center_size(
-                egui::pos2(size.x / 2.0, logo_rect.max.y + 40.0),
+                egui::pos2(size.x / 2.0, logo2_rect.max.y + 40.0),
                 egui::vec2(bar_width, bar_height)
             );
             
@@ -61,13 +89,14 @@ impl OpenDavApp {
                 ui.add_space(15.0);
                 
                 match self.active_page {
-                    ActivePage::OpenDav | ActivePage::Reports => {
+                    ActivePage::OpenDav | ActivePage::Reports | ActivePage::SimGit | ActivePage::Settings => {
                         // 1. CUSTOM CORNER LOGO HEADER
-                        let corner_bytes = include_bytes!("../../assets/corner_logo.png");
+                        let corner_bytes = include_bytes!("../../assets/logo_transparent_lighttext.png");
                         ui.vertical_centered(|ui| {
                             ui.add(
-                                egui::Image::from_bytes("bytes://corner_logo.png", corner_bytes.to_vec())
-                                    .max_width(240.0) // Fills the sidebar width beautifully!
+                                egui::Image::from_bytes("bytes://logo_transparent_lighttext.png", corner_bytes.to_vec())
+                                    .show_loading_spinner(false)
+                                    .max_width(150.0) // Scaled down to fit better as a corner logo
                                     .maintain_aspect_ratio(true)
                             );
                         });
@@ -83,75 +112,116 @@ impl OpenDavApp {
                             // 1. Dashboard Image Button (Full width, padded with selection glow border)
                             let db_bytes = include_bytes!("../../assets/button_dashboard.png");
                             let is_db_selected = self.active_page == ActivePage::OpenDav;
-                            let border_color_db = if is_db_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
                             
                             ui.add_space(5.0);
-                            egui::Frame::none()
-                                .stroke(egui::Stroke::new(2.0, border_color_db))
+                            let img_db = egui::Image::from_bytes("bytes://button_dashboard.png", db_bytes.to_vec())
+                                .max_width(240.0)
                                 .rounding(8.0)
-                                .inner_margin(1.0)
-                                .show(ui, |ui| {
-                                    let img_db = egui::Image::from_bytes("bytes://button_dashboard.png", db_bytes.to_vec())
-                                        .max_width(240.0)
-                                        .rounding(8.0)
-                                        .sense(egui::Sense::click());
-                                    let resp = ui.add(img_db);
-                                    if resp.clicked() {
-                                        self.active_page = ActivePage::OpenDav;
-                                    }
-                                });
+                                .sense(egui::Sense::click());
+                            let resp = ui.add(img_db);
+                            
+                            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+                            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_db_selected);
+                            let color = egui::Rgba::from_rgba_premultiplied(
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
+                                hover_f * (1.0 - sel_f) + sel_f
+                            );
+                            if color.a() > 0.01 {
+                                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                            }
+                            if resp.clicked() {
+                                self.active_page = ActivePage::OpenDav;
+                            }
 
                             ui.add_space(15.0);
 
                             // 2. Graphs Workspace Image Button
                             let gr_bytes = include_bytes!("../../assets/button_graphs.png");
                             let is_gr_selected = self.active_page == ActivePage::Graphs;
-                            let border_color_gr = if is_gr_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
-
-                            egui::Frame::none()
-                                .stroke(egui::Stroke::new(2.0, border_color_gr))
+                            
+                            let img_gr = egui::Image::from_bytes("bytes://button_graphs.png", gr_bytes.to_vec())
+                                .max_width(240.0)
                                 .rounding(8.0)
-                                .inner_margin(1.0)
-                                .show(ui, |ui| {
-                                    let img_gr = egui::Image::from_bytes("bytes://button_graphs.png", gr_bytes.to_vec())
-                                        .max_width(240.0)
-                                        .rounding(8.0)
-                                        .sense(egui::Sense::click());
-                                    let resp = ui.add(img_gr);
-                                    if resp.clicked() {
-                                        self.active_page = ActivePage::Graphs;
-                                        // Default to fastest lap on first entering graphs page
-                                        if !self.sessions.is_empty() && self.selected_lap.is_none() {
-                                            let p_idx = self.primary_session_idx;
-                                            let session = &self.sessions[p_idx].session;
-                                            let fastest_lap = get_fastest_lap(&session.lap_times);
-                                            self.selected_lap = if fastest_lap > 0 { Some((p_idx, fastest_lap)) } else { None };
-                                        }
-                                    }
-                                });
+                                .sense(egui::Sense::click());
+                            let resp = ui.add(img_gr);
+                            
+                            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+                            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_gr_selected);
+                            let color = egui::Rgba::from_rgba_premultiplied(
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
+                                hover_f * (1.0 - sel_f) + sel_f
+                            );
+                            if color.a() > 0.01 {
+                                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                            }
+                            if resp.clicked() {
+                                self.active_page = ActivePage::Graphs;
+                                // Default to fastest lap on first entering graphs page
+                                if !self.sessions.is_empty() && self.selected_lap.is_none() {
+                                    let p_idx = self.primary_session_idx;
+                                    let session = &self.sessions[p_idx].session;
+                                    let fastest_lap = get_fastest_lap(&session.lap_times);
+                                    self.selected_lap = if fastest_lap > 0 { Some((p_idx, fastest_lap)) } else { None };
+                                }
+                            }
 
                             ui.add_space(15.0);
 
                             // 3. Reports Image Button
                             let rep_bytes = include_bytes!("../../assets/button_reports.png");
                             let is_rep_selected = self.active_page == ActivePage::Reports;
-                            let border_color_rep = if is_rep_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
 
-                            egui::Frame::none()
-                                .stroke(egui::Stroke::new(2.0, border_color_rep))
+                            let img_rep = egui::Image::from_bytes("bytes://button_reports.png", rep_bytes.to_vec())
+                                .max_width(240.0)
                                 .rounding(8.0)
-                                .inner_margin(1.0)
-                                .show(ui, |ui| {
-                                    let img_rep = egui::Image::from_bytes("bytes://button_reports.png", rep_bytes.to_vec())
-                                        .max_width(240.0)
-                                        .rounding(8.0)
-                                        .sense(egui::Sense::click());
-                                    let resp = ui.add(img_rep);
-                                    if resp.clicked() {
-                                        self.active_page = ActivePage::Reports;
-                                    }
-                                });
+                                .sense(egui::Sense::click());
+                            let resp = ui.add(img_rep);
+
+                            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+                            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_rep_selected);
+                            let color = egui::Rgba::from_rgba_premultiplied(
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
+                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
+                                hover_f * (1.0 - sel_f) + sel_f
+                            );
+                            if color.a() > 0.01 {
+                                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                            }
+                            if resp.clicked() {
+                                self.active_page = ActivePage::Reports;
+                            }
+
+                            ui.add_space(15.0);
+
+                            // 4. SimGit Image Button (HIDDEN FOR PRE-RELEASE)
+                            // let simgit_bytes = include_bytes!("../../assets/button_simgit.png");
+                            // let is_simgit_selected = self.active_page == ActivePage::SimGit;
+                            // let border_color_simgit = if is_simgit_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
+                            // 
+                            // egui::Frame::none()
+                            //     .stroke(egui::Stroke::new(2.0, border_color_simgit))
+                            //     .rounding(8.0)
+                            //     .inner_margin(1.0)
+                            //     .show(ui, |ui| {
+                            //         let img_simgit = egui::Image::from_bytes("bytes://button_simgit.png", simgit_bytes.to_vec())
+                            //             .max_width(240.0)
+                            //             .rounding(8.0)
+                            //             .sense(egui::Sense::click());
+                            //         let resp = ui.add(img_simgit);
+                            //         if resp.clicked() {
+                            //             self.active_page = ActivePage::SimGit;
+                            //         }
+                            //     });
+
+                            ui.add_space(15.0);
                         });
+
+
                     }
                     ActivePage::Graphs => {
                         // 2. COMPACT MOTEC SIDEBAR CUT-OFF (LAP SELECTION EXCLUSIVE)
@@ -217,6 +287,7 @@ impl OpenDavApp {
                                 let mut new_ref_white = None;
                                 let mut toggle_white_off = false;
                                 let mut new_selected_lap = None;
+                                let mut session_to_remove = None;
 
                                 egui::ScrollArea::vertical().show(ui, |ui| {
                                     ui.vertical(|ui| {
@@ -225,15 +296,26 @@ impl OpenDavApp {
                                             let header_color = if is_primary { ACCENT_COLOR } else { if is_dark { egui::Color32::from_rgb(40,40,40) } else { egui::Color32::from_rgb(210,210,210) } };
                                             let text_color = if is_primary { egui::Color32::BLACK } else { if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK } };
 
+                                            let mut local_remove = false;
                                             let header_btn = egui::Frame::none()
                                                 .fill(header_color)
-                                                .rounding(4.0)
+                                                .corner_radius(4.0)
                                                 .inner_margin(egui::Margin::symmetric(6, 4))
                                                 .show(ui, |ui| {
-                                                    ui.selectable_label(is_primary, egui::RichText::new(&loaded_session.file_name).color(text_color).strong())
+                                                    ui.horizontal(|ui| {
+                                                        let btn = ui.selectable_label(is_primary, egui::RichText::new(&loaded_session.file_name).color(text_color).strong());
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            if ui.button(egui::RichText::new("🗑").color(text_color)).clicked() {
+                                                                local_remove = true;
+                                                            }
+                                                        });
+                                                        btn
+                                                    }).inner
                                                 }).inner;
 
-                                            if header_btn.clicked() {
+                                            if local_remove {
+                                                session_to_remove = Some(s_idx);
+                                            } else if header_btn.clicked() {
                                                 new_primary_idx = Some(s_idx);
                                             }
                                             
@@ -244,7 +326,7 @@ impl OpenDavApp {
 
                                             egui::Frame::none()
                                                 .stroke(egui::Stroke::new(1.0, if is_dark { egui::Color32::from_rgb(50,50,50) } else { egui::Color32::from_rgb(200,200,200) }))
-                                                .rounding(4.0)
+                                                .corner_radius(4.0)
                                                 .inner_margin(egui::Margin::symmetric(6, 4))
                                                 .show(ui, |ui| {
                                                 for (lap_num, duration) in lap_times {
@@ -269,7 +351,7 @@ impl OpenDavApp {
                                                         
                                                         let btn_c = egui::Frame::none()
                                                             .stroke(egui::Stroke::new(1.0, border_color_c))
-                                                            .rounding(4.0)
+                                                            .corner_radius(4.0)
                                                             .inner_margin(egui::Margin::symmetric(4, 2))
                                                             .show(ui, |ui| {
                                                                 ui.selectable_label(false, egui::RichText::new("C").color(if is_cyan { active_cyan } else { egui::Color32::DARK_GRAY }).strong())
@@ -289,7 +371,7 @@ impl OpenDavApp {
                                                         
                                                         let btn_w = egui::Frame::none()
                                                             .stroke(egui::Stroke::new(1.0, border_color_w))
-                                                            .rounding(4.0)
+                                                            .corner_radius(4.0)
                                                             .inner_margin(egui::Margin::symmetric(4, 2))
                                                             .show(ui, |ui| {
                                                                 ui.selectable_label(false, egui::RichText::new("W").color(if is_white { active_white } else { egui::Color32::DARK_GRAY }).strong())
@@ -313,7 +395,7 @@ impl OpenDavApp {
                                                         
                                                         let btn_l = egui::Frame::none()
                                                             .stroke(egui::Stroke::new(1.0, border_color_l))
-                                                            .rounding(4.0)
+                                                            .corner_radius(4.0)
                                                             .inner_margin(egui::Margin::symmetric(6, 3))
                                                             .show(ui, |ui| {
                                                                 ui.selectable_label(false, egui::RichText::new(text).color(label_color).strong())
@@ -331,6 +413,45 @@ impl OpenDavApp {
                                 });
 
                                 let mut state_changed = false;
+                                
+                                if let Some(idx) = session_to_remove {
+                                    self.sessions.remove(idx);
+                                    if self.sessions.is_empty() {
+                                        self.session_loaded = false;
+                                        self.primary_session_idx = 0;
+                                        self.selected_lap = None;
+                                        self.ref_lap_cyan = None;
+                                        self.ref_lap_white = None;
+                                    } else {
+                                        if self.primary_session_idx == idx {
+                                            self.primary_session_idx = 0;
+                                        } else if self.primary_session_idx > idx {
+                                            self.primary_session_idx -= 1;
+                                        }
+                                        
+                                        let mut handle_ref_lap = |r: &mut Option<(usize, i32)>| {
+                                            if let Some((s_idx, lap)) = *r {
+                                                if s_idx == idx {
+                                                    *r = None;
+                                                } else if s_idx > idx {
+                                                    *r = Some((s_idx - 1, lap));
+                                                }
+                                            }
+                                        };
+                                        handle_ref_lap(&mut self.ref_lap_cyan);
+                                        handle_ref_lap(&mut self.ref_lap_white);
+                                        
+                                        if let Some((s_idx, lap)) = self.selected_lap {
+                                            if s_idx == idx {
+                                                self.selected_lap = None;
+                                            } else if s_idx > idx {
+                                                self.selected_lap = Some((s_idx - 1, lap));
+                                            }
+                                        }
+                                        state_changed = true;
+                                    }
+                                }
+                                
                                 if let Some(idx) = new_primary_idx {
                                     self.primary_session_idx = idx;
                                     state_changed = true;
@@ -358,7 +479,7 @@ impl OpenDavApp {
                                     }
                                     state_changed = true;
                                 }
-                                if state_changed {
+                                if state_changed && !self.sessions.is_empty() {
                                     self.update_sector_deltas();
                                 }
                             }
@@ -366,9 +487,40 @@ impl OpenDavApp {
                     }
                 }
 
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(10.0);
-                    ui.label(egui::RichText::new("v0.4.0-rs").color(egui::Color32::DARK_GRAY).small());
+                    ui.horizontal(|ui| {
+                        let is_settings = self.active_page == ActivePage::Settings;
+                        
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                        let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+                        let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_settings);
+                        
+                        let base = egui::Rgba::from(egui::Color32::GRAY);
+                        let acc = egui::Rgba::from(ACCENT_COLOR);
+                        let gear_color = egui::Rgba::from_rgba_premultiplied(
+                            base.r() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.r() * sel_f,
+                            base.g() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.g() * sel_f,
+                            base.b() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.b() * sel_f,
+                            base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f
+                        ).into();
+                        
+                        ui.painter().text(
+                            rect.center(), 
+                            egui::Align2::CENTER_CENTER, 
+                            "⚙", 
+                            egui::FontId::proportional(22.0), 
+                            gear_color
+                        );
+                        
+                        if resp.on_hover_text("Settings").clicked() {
+                            self.active_page = ActivePage::Settings;
+                        }
+                        
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new("v0.6.0-rs").color(egui::Color32::DARK_GRAY).small());
+                        });
+                    });
                 });
             });
     }
@@ -385,38 +537,36 @@ impl OpenDavApp {
                         .set_title("Select Telemetry File")
                         .pick_file() 
                     {
-                        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-                        self.active_file = Some(file_name.clone());
-                        match crate::data::ibt_parser::parse_ibt_file(&path) {
-                            Ok(parsed_session) => {
-                                self.session_loaded = true;
-                                
-                                // Trigger the asynchronous background SVG track map downloader
-                                trigger_track_map_download(parsed_session.track_id);
-                                
-                                let new_session = crate::LoadedSession::new(file_name, parsed_session);
-                                self.sessions.push(new_session);
-                                
-                                let new_idx = self.sessions.len() - 1;
-                                self.primary_session_idx = new_idx;
-                                
-                                // Auto-load fastest lap in caching layer on file load
-                                let fastest = get_fastest_lap(&self.sessions[new_idx].session.lap_times);
-                                self.selected_lap = if fastest > 0 { Some((new_idx, fastest)) } else { None };
-                                
-                                self.cursor_x = None;
-                                self.update_sector_deltas();
-                            }
-                            Err(e) => {
-                                eprintln!("Error parsing .ibt file: {}", e);
-                            }
-                        }
+                        self.load_telemetry_file(path.as_path());
                     }
                 }
 
-                if let Some(file) = &self.active_file {
+                if !self.sessions.is_empty() {
                     ui.separator();
-                    ui.label(egui::RichText::new(format!("File: {}", file)).color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small());
+                    let primary_file_name = &self.sessions[self.primary_session_idx].file_name;
+                    
+                    if self.sessions.len() == 1 {
+                        ui.label(egui::RichText::new(format!("File: {}", primary_file_name)).color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small());
+                    } else {
+                        let mut new_primary = None;
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Primary File:").color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small());
+                            egui::ComboBox::from_id_source("top_primary_session_dropdown")
+                                .selected_text(egui::RichText::new(primary_file_name).small())
+                                .show_ui(ui, |ui| {
+                                    for (idx, session) in self.sessions.iter().enumerate() {
+                                        if ui.selectable_label(self.primary_session_idx == idx, &session.file_name).clicked() {
+                                            new_primary = Some(idx);
+                                        }
+                                    }
+                                });
+                        });
+                        
+                        if let Some(idx) = new_primary {
+                            self.primary_session_idx = idx;
+                            self.update_sector_deltas();
+                        }
+                    }
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

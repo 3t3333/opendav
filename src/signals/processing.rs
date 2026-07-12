@@ -201,7 +201,7 @@ pub fn get_lap_segments(lap: &LapData) -> Vec<Vec<[f64; 2]>> {
 }
 
 // Automatically detects track corners and straights based on the fastest lap's lateral G-force and steering angle.
-pub fn detect_track_sectors(session: &IbtSession) -> Vec<TrackSector> {
+pub fn detect_track_sectors(session: &IbtSession, merge_threshold: f64) -> Vec<TrackSector> {
     let mut sectors = Vec::new();
     let fastest_lap = get_fastest_lap(&session.lap_times);
     if fastest_lap <= 0 {
@@ -278,7 +278,7 @@ pub fn detect_track_sectors(session: &IbtSession) -> Vec<TrackSector> {
         let mut curr = raw_corners[0];
         for next in raw_corners.iter().skip(1) {
             let gap_dist = lap_dist[next.0] - lap_dist[curr.1];
-            if gap_dist < 25.0 {
+            if gap_dist < merge_threshold {
                 curr.1 = next.1;
             } else {
                 merged_corners.push(curr);

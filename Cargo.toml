@@ -1,6 +1,6 @@
 [package]
 name = "opendav_rs"
-version = "0.2.0"
+version = "0.6.0-rs"
 edition = "2021"
 authors = ["Arturo <arturo@opendav.com>"]
 description = "High-performance virtual race engineering & telemetry workspace for iRacing"
@@ -20,3 +20,4 @@ serde_json = "1.0.150"
 serde_yaml = "0.9.34"
 chrono = "0.4.45"
 image = "0.25.10"
+regex = "1.12.4"
