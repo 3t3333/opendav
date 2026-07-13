@@ -163,6 +163,71 @@ pub fn get_lap_coord_at_time(lap: &LapData, target_time: f64) -> (f64, f64) {
 
 // Splits a lap's coordinates into multiple continuous segments to prevent drawing straight lines across teleportations/resets
 // Cleaned of egui_plot dependencies: returns pure coordinate points!
+pub fn get_magnified_lap_coord(ref_lap: &LapData, active_lap: &LapData, target_dist: f64, multiplier: f64) -> (f64, f64) {
+    let (rx, ry) = get_lap_coord_at_distance(ref_lap, target_dist);
+    let (ax, ay) = get_lap_coord_at_distance(active_lap, target_dist);
+    let dx = rx - ax;
+    let dy = ry - ay;
+    (ax + dx * multiplier, ay + dy * multiplier)
+}
+
+pub fn get_lap_distance_at_time(lap: &LapData, target_time: f64) -> f64 {
+    if lap.time.is_empty() { return 0.0; }
+    if target_time <= lap.time[0] { return lap.dist[0]; }
+    if target_time >= lap.time[lap.time.len() - 1] { return lap.dist[lap.dist.len() - 1]; }
+    
+    match lap.time.binary_search_by(|val| val.partial_cmp(&target_time).unwrap_or(std::cmp::Ordering::Equal)) {
+        Ok(idx) => lap.dist[idx],
+        Err(idx) => {
+            let t0 = lap.time[idx - 1];
+            let t1 = lap.time[idx];
+            let d0 = lap.dist[idx - 1];
+            let d1 = lap.dist[idx];
+            let f = (target_time - t0) / (t1 - t0);
+            d0 + (d1 - d0) * f
+        }
+    }
+}
+
+pub fn get_magnified_lap_segments(ref_lap: &LapData, active_lap: &LapData, multiplier: f64) -> Vec<Vec<[f64; 2]>> {
+    let mut segments = Vec::new();
+    let n = ref_lap.x.len();
+    if n == 0 { return segments; }
+    
+    let max_jump = 50.0;
+    let mut current_segment = Vec::new();
+    
+    let (mx0, my0) = get_magnified_lap_coord(ref_lap, active_lap, ref_lap.dist[0], multiplier);
+    current_segment.push([mx0, my0]);
+    
+    for i in 1..n {
+        let (mx1, my1) = get_magnified_lap_coord(ref_lap, active_lap, ref_lap.dist[i], multiplier);
+        
+        let rx0 = ref_lap.x[i - 1];
+        let ry0 = ref_lap.y[i - 1];
+        let rx1 = ref_lap.x[i];
+        let ry1 = ref_lap.y[i];
+        
+        let dx = rx1 - rx0;
+        let dy = ry1 - ry0;
+        let dist = (dx * dx + dy * dy).sqrt();
+        
+        if dist > max_jump {
+            if !current_segment.is_empty() {
+                segments.push(current_segment);
+                current_segment = Vec::new();
+            }
+        }
+        current_segment.push([mx1, my1]);
+    }
+    
+    if !current_segment.is_empty() {
+        segments.push(current_segment);
+    }
+    
+    segments
+}
+
 pub fn get_lap_segments(lap: &LapData) -> Vec<Vec<[f64; 2]>> {
     let mut segments = Vec::new();
     let n = lap.x.len();

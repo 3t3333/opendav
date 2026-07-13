@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 pub mod data;
 pub mod signals;
 pub mod config;
@@ -118,6 +120,11 @@ pub struct OpenDavApp {
     pub sector_deltas: Vec<Option<f64>>,
     
     pub show_all_splits: bool,
+    pub auto_follow_track_map: bool,
+    pub auto_rotate_track_map: bool,
+    pub track_map_rotation: f64,
+    pub magnify_line_deltas: bool,
+    pub magnifier_multiplier: f64,
     pub hidden_splits: std::collections::HashSet<String>,
     
     // Timing Graphs state
@@ -171,6 +178,11 @@ impl Default for OpenDavApp {
             show_chart_deltas: false,
             sector_deltas: Vec::new(),
             show_all_splits: true,
+            auto_follow_track_map: true,
+            auto_rotate_track_map: false,
+            track_map_rotation: 0.0,
+            magnify_line_deltas: false,
+            magnifier_multiplier: 10.0,
             hidden_splits: std::collections::HashSet::new(),
             filter_large_sectors: true,
             is_playing: false,

@@ -13,6 +13,16 @@ impl OpenDavApp {
         egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
             let size = ui.available_size();
             
+            let bg_bytes = include_bytes!("../../assets/splash_bg.jpg");
+            let bg_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+            
+            let bg_img = egui::Image::from_bytes("bytes://splash_bg.jpg", bg_bytes.to_vec())
+                .fit_to_exact_size(size);
+            ui.put(bg_rect, bg_img);
+            
+            // Dark overlay
+            ui.painter().rect_filled(bg_rect, 0.0, egui::Color32::from_black_alpha(220));
+            
             // Center the logo and loading bar vertically and horizontally
             let logo2_width = 550.0;
             let logo2_height = logo2_width * (1440.0 / 2560.0); // 2560x1440 ratio
@@ -518,7 +528,7 @@ impl OpenDavApp {
                         }
                         
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new("v0.6.0-rs").color(egui::Color32::DARK_GRAY).small());
+                            ui.label(egui::RichText::new("v0.8.0-rs").color(egui::Color32::DARK_GRAY).small());
                         });
                     });
                 });
@@ -531,13 +541,45 @@ impl OpenDavApp {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.add_space(6.0);
             egui::menu::bar(ui, |ui| {
-                if ui.button("📂 Load IBT Telemetry").clicked() {
+                if ui.button("Load IBT Telemetry").clicked() {
                     if let Some(path) = FileDialog::new()
                         .add_filter("iRacing Telemetry", &["ibt"])
                         .set_title("Select Telemetry File")
                         .pick_file() 
                     {
                         self.load_telemetry_file(path.as_path());
+                    }
+                }
+
+                if self.session_loaded && !self.sessions.is_empty() {
+                    ui.add_space(8.0);
+                    if ui.button("Export CSV").clicked() {
+                        let primary = &mut self.sessions[self.primary_session_idx];
+                        let default_name = format!("{}.csv", primary.file_name.replace(".ibt", ""));
+                        if let Some(path) = FileDialog::new()
+                            .add_filter("CSV File", &["csv"])
+                            .set_file_name(&default_name)
+                            .set_title("Export Telemetry to CSV")
+                            .save_file()
+                        {
+                            let session = &mut primary.session;
+                            if let Ok(mut file) = std::fs::File::create(&path) {
+                                use std::io::Write;
+                                let _ = writeln!(file, "# Source: {}", session.source_file);
+                                let _ = writeln!(file, "# Car: {}", session.car);
+                                let _ = writeln!(file, "# Venue: {}", session.venue);
+                                let _ = writeln!(file, "# Air Temp: {}", session.air_temp);
+                                let _ = writeln!(file, "# Surface Temp: {}", session.surface_temp);
+                                let _ = writeln!(file, "# Timestamp: {}", session.timestamp);
+                                let _ = writeln!(file, "# Total Time: {:.3}s", session.total_session_time);
+                                let _ = writeln!(file, "# Laps: {}", session.lap_times.len());
+                                
+                                use polars::prelude::SerWriter;
+                                let _ = polars::prelude::CsvWriter::new(&mut file)
+                                    .include_header(true)
+                                    .finish(&mut session.dataframe);
+                            }
+                        }
                     }
                 }
 
