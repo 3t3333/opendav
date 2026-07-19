@@ -18,6 +18,7 @@ pub struct VarHeader {
 #[derive(Debug, Clone)]
 pub struct IbtSession {
     pub source_file: String,
+    pub yaml_str: String,
     pub car: String,
     pub venue: String,
     pub air_temp: String,
@@ -331,14 +332,13 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     let dataframe = DataFrame::new(series_list)?;
 
     // Extract File Timestamp
-    let file_name = file_path.as_ref()
-        .file_name()
-        .unwrap_or_default()
+    let file_path_str = file_path.as_ref()
         .to_string_lossy()
         .to_string();
 
     Ok(IbtSession {
-        source_file: file_name,
+        source_file: file_path_str,
+        yaml_str: yaml_str.to_string(),
         car,
         venue,
         air_temp,

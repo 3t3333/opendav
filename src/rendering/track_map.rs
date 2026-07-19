@@ -12,11 +12,48 @@ impl OpenDavApp {
             ui.label("No track map coordinates precomputed.");
             return;
         }
+
+        let initial_reset_bounds = self.reset_bounds_flag;
+
+        if self.enable_satellite_map && self.sessions[self.primary_session_idx].bg_image_bytes.is_none() {
+            let api_key = self.settings.mapbox_api_key.clone();
+            self.sessions[self.primary_session_idx].fetch_satellite_maps(&api_key);
+        }
+        
+        if self.sessions[self.primary_session_idx].bg_texture.is_none() {
+            if let Some(bytes) = &self.sessions[self.primary_session_idx].bg_image_bytes {
+                if let Ok(mut image) = image::load_from_memory(bytes) {
+                    let max_dim = 8192;
+                    if image.width() > max_dim || image.height() > max_dim {
+                        image = image.resize(max_dim, max_dim, image::imageops::FilterType::Triangle);
+                    }
+                    let size = [image.width() as _, image.height() as _];
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, image.to_rgba8().as_flat_samples().as_slice());
+                    let texture = ui.ctx().load_texture("mapbox_bg_track_map", color_image, egui::TextureOptions::default());
+                    self.sessions[self.primary_session_idx].bg_texture = Some(texture);
+                }
+            }
+        }
+        
+        if self.sessions[self.primary_session_idx].fg_texture.is_none() {
+            if let Some(bytes) = &self.sessions[self.primary_session_idx].fg_image_bytes {
+                if let Ok(mut image) = image::load_from_memory(bytes) {
+                    let max_dim = 8192;
+                    if image.width() > max_dim || image.height() > max_dim {
+                        image = image.resize(max_dim, max_dim, image::imageops::FilterType::Triangle);
+                    }
+                    let size = [image.width() as _, image.height() as _];
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, image.to_rgba8().as_flat_samples().as_slice());
+                    let texture = ui.ctx().load_texture("mapbox_fg_track_map", color_image, egui::TextureOptions::default());
+                    self.sessions[self.primary_session_idx].fg_texture = Some(texture);
+                }
+            }
+        }
         
         let loaded = &self.sessions[self.primary_session_idx];
 
         // Draw checkbox bar at the top of the track map card
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
             if ref_active {
                 ui.checkbox(&mut self.show_sector_deltas, egui::RichText::new("Sector Delta Overlays").strong());
@@ -32,6 +69,10 @@ impl OpenDavApp {
             }
             ui.add_space(15.0);
             ui.checkbox(&mut self.show_all_splits, "Toggle All Splits");
+            ui.add_space(15.0);
+            if ui.checkbox(&mut self.enable_satellite_map, "Satellite Map (Beta)").changed() {
+                // Fetch is triggered automatically at the top of this function
+            }
             ui.add_space(15.0);
             ui.checkbox(&mut self.auto_follow_track_map, "Auto-Follow Car");
             ui.add_space(15.0);
@@ -150,6 +191,38 @@ impl OpenDavApp {
             // Plot taking the remaining space on the left
             ui.allocate_ui(egui::vec2(plot_width.max(100.0), height), |ui| {
                 let reset_bounds_flag = self.reset_bounds_flag;
+                
+                if reset_bounds_flag {
+                    // Compute raw unrotated bounds to find aspect ratio of track
+                    let mut raw_min_x = f64::MAX;
+                    let mut raw_max_x = f64::MIN;
+                    let mut raw_min_y = f64::MAX;
+                    let mut raw_max_y = f64::MIN;
+                    for i in 0..active_lap.x.len() {
+                        let px = active_lap.x[i];
+                        let py = active_lap.y[i];
+                        if px.is_nan() || py.is_nan() { continue; }
+                        raw_min_x = raw_min_x.min(px);
+                        raw_max_x = raw_max_x.max(px);
+                        raw_min_y = raw_min_y.min(py);
+                        raw_max_y = raw_max_y.max(py);
+                    }
+                    let data_w = raw_max_x - raw_min_x;
+                    let data_h = raw_max_y - raw_min_y;
+                    
+                    let phys_w = plot_width.max(100.0) as f64;
+                    let phys_h = height as f64;
+                    
+                    let data_aspect = data_w / data_h.max(0.0001);
+                    let phys_aspect = phys_w / phys_h.max(0.0001);
+                    
+                    if (phys_aspect > 1.0 && data_aspect < 1.0) || (phys_aspect < 1.0 && data_aspect > 1.0) {
+                        self.track_map_rotation = std::f64::consts::PI / 2.0; // Rotate 90 degrees
+                    } else {
+                        self.track_map_rotation = 0.0;
+                    }
+                    self.auto_rotate_track_map = false;
+                }
 
                 let mut lap_rel_time = 0.0;
                 if let Some(cx) = self.cursor_x {
@@ -161,6 +234,7 @@ impl OpenDavApp {
                             lap_rel_time = end_t - start_t;
                         }
                     }
+                    
                     if self.auto_rotate_track_map {
                         let (cx_x1, cx_y1) = get_lap_coord_at_time(active_lap, lap_rel_time);
                         let (cx_x2, cx_y2) = get_lap_coord_at_time(active_lap, lap_rel_time + 0.1);
@@ -183,6 +257,21 @@ impl OpenDavApp {
                     segs.into_iter().map(|line| line.into_iter().map(|p| rotate_point(p[0], p[1])).collect()).collect()
                 };
 
+                let mut min_x = f64::MAX;
+                let mut max_x = f64::MIN;
+                let mut min_y = f64::MAX;
+                let mut max_y = f64::MIN;
+                for i in 0..active_lap.x.len() {
+                    let px = active_lap.x[i];
+                    let py = active_lap.y[i];
+                    if px.is_nan() || py.is_nan() { continue; }
+                    let p = rotate_point(px, py);
+                    min_x = min_x.min(p[0]);
+                    max_x = max_x.max(p[0]);
+                    min_y = min_y.min(p[1]);
+                    max_y = max_y.max(p[1]);
+                }
+                
                 // Initialize the egui_plot
                 let plot = Plot::new("interactive_track_map_plot")
                     .height(height)
@@ -190,55 +279,98 @@ impl OpenDavApp {
                     .show_grid(false)
                     .allow_zoom(true)
                     .allow_drag(true)
+                    .data_aspect(1.0)
+                    .allow_double_click_reset(false)
                     .auto_bounds(egui::Vec2b::new(false, false));
 
                 let plot_resp = plot.show(ui, |plot_ui| {
-                    if reset_bounds_flag {
-                        let mut min_x = f64::MAX;
-                        let mut max_x = f64::MIN;
-                        let mut min_y = f64::MAX;
-                        let mut max_y = f64::MIN;
-                        for i in 0..active_lap.x.len() {
-                            let p = rotate_point(active_lap.x[i], active_lap.y[i]);
-                            min_x = min_x.min(p[0]);
-                            max_x = max_x.max(p[0]);
-                            min_y = min_y.min(p[1]);
-                            max_y = max_y.max(p[1]);
-                        }
-                        
+                    if initial_reset_bounds {
                         if min_x < max_x && min_y < max_y {
-                            // Calculate data dimensions
+                            // Give the exact un-padded bounding box of the track trace to egui_plot.
+                            // Because we use `.data_aspect(1.0)`, egui_plot will automatically 
+                            // expand the bounds to seamlessly fit the physical aspect ratio of the window,
+                            // without clipping any of the track.
+                            
+                            let center_x = (min_x + max_x) / 2.0;
+                            let center_y = (min_y + max_y) / 2.0;
+                            
                             let data_w = max_x - min_x;
                             let data_h = max_y - min_y;
                             
-                            // Calculate physical dimensions
                             let phys_w = plot_width.max(100.0) as f64;
                             let phys_h = height as f64;
                             
-                            // To maintain a 1:1 aspect ratio manually, we pad the bounds so that 
-                            // data_w / data_h equals phys_w / phys_h
                             let mut target_w = data_w;
                             let mut target_h = data_h;
                             
                             if data_w * phys_h > data_h * phys_w {
-                                // Data is wider relative to physical, so we pad data height
                                 target_h = data_w * phys_h / phys_w;
                             } else {
-                                // Data is taller relative to physical, so we pad data width
                                 target_w = data_h * phys_w / phys_h;
                             }
                             
-                            // Add an extra 5% margin
                             target_w *= 1.05;
                             target_h *= 1.05;
-                            
-                            let center_x = (min_x + max_x) / 2.0;
-                            let center_y = (min_y + max_y) / 2.0;
                             
                             plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
                                 [center_x - target_w / 2.0, center_y - target_h / 2.0],
                                 [center_x + target_w / 2.0, center_y + target_h / 2.0],
                             ));
+                        }
+                    }
+                    if self.enable_satellite_map {
+                        // 0. Draw Mapbox Track Map (BG Layer)
+                        if let (Some(texture), Some(bounds)) = (&loaded.bg_texture, &loaded.bg_bounds) {
+                            let (min_x, min_y) = crate::signals::mapbox::wgs84_to_web_mercator(bounds[0], bounds[1]);
+                            let (max_x, max_y) = crate::signals::mapbox::wgs84_to_web_mercator(bounds[2], bounds[3]);
+                            
+                            let mut center_x = (min_x + max_x) / 2.0;
+                            let mut center_y = (min_y + max_y) / 2.0;
+                            if let Some(origin) = loaded.map_origin {
+                                center_x -= origin[0];
+                                center_y -= origin[1];
+                            }
+                            
+                            let size_x = max_x - min_x;
+                            let size_y = max_y - min_y;
+                            let rot_center = rotate_point(center_x, center_y);
+                            
+                            plot_ui.image(
+                                egui_plot::PlotImage::new(
+                                    "mapbox_bg_layer",
+                                    texture,
+                                    egui_plot::PlotPoint::new(rot_center[0], rot_center[1]),
+                                    egui::vec2(size_x as f32, size_y as f32),
+                                ).rotate(self.track_map_rotation)
+                            );
+                        }
+                        
+                        // 0.5. Draw Mapbox Track Map (FG Layer)
+                        if let (Some(texture), Some(bounds)) = (&loaded.fg_texture, &loaded.fg_bounds) {
+                            let (min_x, min_y) = crate::signals::mapbox::wgs84_to_web_mercator(bounds[0], bounds[1]);
+                            let (max_x, max_y) = crate::signals::mapbox::wgs84_to_web_mercator(bounds[2], bounds[3]);
+                            
+                            let mut center_x = (min_x + max_x) / 2.0;
+                            let mut center_y = (min_y + max_y) / 2.0;
+                            
+                            if let Some(origin) = loaded.map_origin {
+                                center_x -= origin[0];
+                                center_y -= origin[1];
+                            }
+                            
+                            let size_x = max_x - min_x;
+                            let size_y = max_y - min_y;
+                            
+                            let rot_center = rotate_point(center_x, center_y);
+                            
+                            plot_ui.image(
+                                egui_plot::PlotImage::new(
+                                    "mapbox_fg_layer",
+                                    texture,
+                                    egui_plot::PlotPoint::new(rot_center[0], rot_center[1]),
+                                    egui::vec2(size_x as f32, size_y as f32), // Standard Web Mercator Y-up mapping
+                                ).rotate(self.track_map_rotation)
+                            );
                         }
                     }
 
@@ -487,32 +619,15 @@ impl OpenDavApp {
                     self.auto_follow_track_map = false;
                 }
 
-                // COMPASS UI WIDGET
-                let plot_rect = plot_resp.response.rect;
-                let compass_center = plot_rect.right_bottom() - egui::vec2(45.0, 45.0);
-                let compass_radius = 25.0;
-                let compass_rect = egui::Rect::from_center_size(compass_center, egui::vec2(compass_radius * 2.0, compass_radius * 2.0));
-                
-                let compass_resp = ui.interact(compass_rect, ui.id().with("compass"), egui::Sense::drag())
-                    .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
-                
-                if compass_resp.dragged() {
-                    self.auto_rotate_track_map = false;
-                    let delta = compass_resp.drag_delta();
-                    // Map horizontal mouse movement directly to rotation for smoother touchpad experience
-                    self.track_map_rotation += (delta.x * 0.015) as f64;
+                if plot_resp.response.double_clicked() {
+                    self.reset_bounds_flag = true;
+                    self.auto_follow_track_map = false;
                 }
 
-                let bg_color = if is_dark { egui::Color32::from_black_alpha(150) } else { egui::Color32::from_white_alpha(150) };
-                ui.painter().circle_filled(compass_center, compass_radius, bg_color);
-                ui.painter().circle_stroke(compass_center, compass_radius, (1.0, egui::Color32::GRAY));
-                
-                let dir = egui::vec2(self.track_map_rotation.cos() as f32, -self.track_map_rotation.sin() as f32);
-                ui.painter().line_segment([compass_center, compass_center + dir * compass_radius], (2.5, ACCENT_COLOR));
             });
         });
 
-        if self.reset_bounds_flag {
+        if initial_reset_bounds {
             self.reset_bounds_flag = false;
         }
     }

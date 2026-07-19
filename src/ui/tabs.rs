@@ -8,12 +8,58 @@ use crate::signals::processing::{
 impl OpenDavApp {
     pub fn draw_dashboard_page(&mut self, ui: &mut egui::Ui, is_dark: bool) {
         if !self.session_loaded || self.sessions.is_empty() {
-            ui.centered_and_justified(|ui| {
-                ui.vertical_centered(|ui| {
-                    ui.label(egui::RichText::new("Awaiting Telemetry Stream").heading().color(SUB_ACCENT_COLOR));
-                    ui.label(egui::RichText::new("Please load an iRacing .ibt file from the top taskbar.").color(egui::Color32::GRAY));
+            let ctx = ui.ctx().clone();
+            
+            let is_hovered = ctx.input(|i| !i.raw.hovered_files.is_empty());
+            let stroke_color = if is_hovered { ACCENT_COLOR } else { egui::Color32::from_rgb(50, 50, 50) };
+            let bg_color = if is_dark { egui::Color32::from_rgb(20, 20, 20) } else { egui::Color32::from_rgb(240, 240, 240) };
+            
+            egui::Frame::none()
+                .fill(bg_color)
+                .stroke(egui::Stroke::new(3.0, stroke_color))
+                .corner_radius(16.0)
+                .inner_margin(egui::Margin::same(40))
+                .show(ui, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(egui::RichText::new("Drop Telemetry File Here").size(32.0).strong().color(if is_hovered { ACCENT_COLOR } else { SUB_ACCENT_COLOR }));
+                            ui.add_space(20.0);
+                            ui.label(egui::RichText::new("Drag and drop an iRacing .ibt file onto this window,").size(18.0).color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("or click 'Load IBT Telemetry' above to browse.").size(18.0).color(egui::Color32::GRAY));
+                            
+                            if !self.settings.recent_files.is_empty() {
+                                ui.add_space(50.0);
+                                ui.label(egui::RichText::new("RECENT FILES").size(16.0).strong().color(egui::Color32::DARK_GRAY));
+                                ui.add_space(15.0);
+                                
+                                let recent_files = self.settings.recent_files.clone();
+                                for recent in recent_files {
+                                    let file_name = std::path::Path::new(&recent).file_name().unwrap_or_default().to_string_lossy();
+                                    let btn = egui::Button::new(egui::RichText::new(format!("📄 {}", file_name)).size(16.0))
+                                        .fill(if is_dark { egui::Color32::from_rgb(30, 30, 30) } else { egui::Color32::from_rgb(220, 220, 220) })
+                                        .rounding(8.0)
+                                        .min_size(egui::vec2(300.0, 45.0));
+                                        
+                                    if ui.add(btn).on_hover_text(&recent).clicked() {
+                                        // Wait, we need to defer loading to avoid borrow checker issues with `self` inside closure if we didn't clone, but wait, `self` is currently borrowed as `&mut self` by `ui`. Wait! `ui` does not borrow `self`. But `self` is borrowed mutably to call `load_telemetry_file`. Let's see if this compiles. If not we set a flag.
+                                        // Actually `self` is NOT borrowed by `ui.add()`. We can call `self.load_telemetry_file()`!
+                                        self.load_telemetry_file(std::path::Path::new(&recent));
+                                    }
+                                    ui.add_space(8.0);
+                                }
+                            }
+                        });
+                    });
                 });
+                
+            ctx.input(|i| {
+                if let Some(file) = i.raw.dropped_files.first() {
+                    if let Some(path) = &file.path {
+                        self.load_telemetry_file(path);
+                    }
+                }
             });
+            
             return;
         }
 
@@ -334,25 +380,25 @@ impl OpenDavApp {
         if !has_data {
             ui.label("No sector or lap data available for report.");
         } else {
-            ui.columns(2, |cols| {
-                cols[0].vertical(|ui| {
-                    let loaded = &self.sessions[self.primary_session_idx];
-                    let mut visible_laps: Vec<&crate::signals::processing::LapData> = loaded.lap_data_cache.iter()
-                        .filter(|lap| lap.lap_num > 3)
-                        .collect();
-                    if visible_laps.is_empty() {
-                        visible_laps = loaded.lap_data_cache.iter().collect();
-                    }
+            ui.vertical(|ui| {
+                let loaded = &self.sessions[self.primary_session_idx];
+                let mut visible_laps: Vec<&crate::signals::processing::LapData> = loaded.lap_data_cache.iter()
+                    .filter(|lap| lap.lap_num > 3)
+                    .collect();
+                if visible_laps.is_empty() {
+                    visible_laps = loaded.lap_data_cache.iter().collect();
+                }
 
-                    let best_total_time = visible_laps.iter()
-                        .map(|lap| lap.time.last().copied().unwrap_or(0.0))
-                        .filter(|&t| t > 0.0)
-                        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                        .unwrap_or(0.0);
+                let best_total_time = visible_laps.iter()
+                    .map(|lap| lap.time.last().copied().unwrap_or(0.0))
+                    .filter(|&t| t > 0.0)
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .unwrap_or(0.0);
 
-                    egui::ScrollArea::both()
-                        .id_salt("sector_report_scroll")
-                        .show(ui, |ui| {
+                egui::ScrollArea::both()
+                    .id_salt("sector_report_scroll")
+                    .max_height(300.0)
+                    .show(ui, |ui| {
                             egui::Grid::new("sector_report_grid")
                                 .striped(true)
                                 .min_col_width(85.0)
@@ -443,21 +489,21 @@ impl OpenDavApp {
                                             ui.label(egui::RichText::new(format_lap_time(optimal_total)).color(egui::Color32::WHITE).strong());
                                         });
                                     ui.end_row();
-                                });
-                        });
-                });
-
-                cols[1].vertical(|ui| {
-                    let venue_name = self.sessions[self.primary_session_idx].session.venue.to_uppercase();
-                    ui.heading(egui::RichText::new(venue_name).strong().color(crate::config::worksheet::ACCENT_COLOR));
-                    ui.add_space(8.0);
-                    ui.group(|ui| {
-                        self.draw_interactive_track_map(ui, 450.0);
+                            });
                     });
+                
+                ui.add_space(20.0);
+
+                let venue_name = self.sessions[self.primary_session_idx].session.venue.to_uppercase();
+                ui.heading(egui::RichText::new(venue_name).strong().color(crate::config::worksheet::ACCENT_COLOR));
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    let map_height = ui.available_height().max(300.0);
+                    self.draw_interactive_track_map(ui, map_height);
                 });
             });
-            }
         }
+    }
         crate::ReportsTab::TimingGraphs => {
             self.draw_timing_graphs_page(ui, is_dark);
         }

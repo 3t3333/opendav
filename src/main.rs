@@ -7,6 +7,9 @@ pub mod rendering;
 pub mod ui;
 pub mod simgit;
 
+#[cfg(feature = "dev_tools")]
+pub mod dev_tools;
+
 use crate::config::worksheet::{WorksheetTab, WorksheetConfig, ACCENT_COLOR, DARK_BG_COLOR, LIGHT_BG_COLOR};
 use crate::signals::processing::{
     LapData, TrackSector, detect_track_sectors, get_lap_time_at_distance, get_fastest_lap
@@ -43,6 +46,7 @@ pub enum AppState {
 pub struct LoadedSession {
     pub file_name: String,
     pub session: crate::data::ibt_parser::IbtSession,
+    pub track_bounds: Option<(f64, f64, f64, f64)>,
     
     // Caching compiled, scaled PlotPoints for 300+ FPS zero-allocation rendering!
     pub front_pts_cache: Vec<[f64; 2]>,
@@ -72,6 +76,13 @@ pub struct LoadedSession {
     pub sectors: Vec<TrackSector>,
     pub sector_bests: Vec<f64>,
     pub lap_data_cache: Vec<LapData>,
+    pub bg_image_bytes: Option<Vec<u8>>,
+    pub bg_bounds: Option<[f64; 4]>,
+    pub bg_texture: Option<egui::TextureHandle>,
+    pub fg_image_bytes: Option<Vec<u8>>,
+    pub fg_bounds: Option<[f64; 4]>,
+    pub fg_texture: Option<egui::TextureHandle>,
+    pub map_origin: Option<[f64; 2]>,
 }
 
 pub struct OpenDavApp {
@@ -120,9 +131,12 @@ pub struct OpenDavApp {
     pub sector_deltas: Vec<Option<f64>>,
     
     pub show_all_splits: bool,
+    
+    // Track Map Customization
     pub auto_follow_track_map: bool,
     pub auto_rotate_track_map: bool,
     pub track_map_rotation: f64,
+    pub enable_satellite_map: bool,
     pub magnify_line_deltas: bool,
     pub magnifier_multiplier: f64,
     pub hidden_splits: std::collections::HashSet<String>,
@@ -147,6 +161,9 @@ pub struct OpenDavApp {
 
     // Application Settings
     pub settings: crate::config::settings::AppSettings,
+
+    #[cfg(feature = "dev_tools")]
+    pub dev_metrics: crate::dev_tools::DebugMetrics,
 }
 
 impl Default for OpenDavApp {
@@ -178,9 +195,10 @@ impl Default for OpenDavApp {
             show_chart_deltas: false,
             sector_deltas: Vec::new(),
             show_all_splits: true,
-            auto_follow_track_map: true,
+            auto_follow_track_map: false,
             auto_rotate_track_map: false,
             track_map_rotation: 0.0,
+            enable_satellite_map: false,
             magnify_line_deltas: false,
             magnifier_multiplier: 10.0,
             hidden_splits: std::collections::HashSet::new(),
@@ -196,6 +214,9 @@ impl Default for OpenDavApp {
             show_new_ws_popup: false,
             simgit_track_maps: std::collections::HashMap::new(),
             settings: crate::config::settings::AppSettings::default(),
+            
+            #[cfg(feature = "dev_tools")]
+            dev_metrics: crate::dev_tools::DebugMetrics::default(),
         }
     }
 }
@@ -243,7 +264,7 @@ impl OpenDavApp {
 }
 
 impl LoadedSession {
-    pub fn new(file_name: String, mut session: crate::data::ibt_parser::IbtSession, corner_merge_threshold: f64) -> Self {
+    pub fn new(file_name: String, mut session: crate::data::ibt_parser::IbtSession, corner_merge_threshold: f64, mapbox_api_key: &str) -> Result<Self, String> {
         let n = session.distance.len();
             
             // Build base points
@@ -260,7 +281,9 @@ impl LoadedSession {
             let mut longg = Vec::with_capacity(n);
             let mut cache_to_df_index = Vec::with_capacity(n);
 
-            let time_col = session.dataframe.column("SessionTime").unwrap().f64().unwrap();
+            let time_col_opt = session.dataframe.column("SessionTime").ok().and_then(|c| c.f64().ok());
+            if time_col_opt.is_none() { return Err("SessionTime missing".into()); }
+            let time_col = time_col_opt.unwrap();
             let session_start = time_col.get(0).unwrap_or(0.0);
 
             // Fetch columns safely with fallback defaults to prevent schema panics!
@@ -422,8 +445,11 @@ impl LoadedSession {
             let mut ranges = Vec::new();
 
             let df = &session.dataframe;
-            let lap_col = df.column("Lap").unwrap().f64().unwrap();
-            let time_col = df.column("SessionTime").unwrap().f64().unwrap();
+            let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
+            let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
+            if lap_col_opt.is_none() || time_col_opt.is_none() { return Err("Lap/Time missing".into()); }
+            let lap_col = lap_col_opt.unwrap();
+            let time_col = time_col_opt.unwrap();
             let session_start = time_col.get(0).unwrap_or(0.0);
 
             for &(lap_num, _duration) in &session.lap_times {
@@ -469,22 +495,45 @@ impl LoadedSession {
             }
 
             let df = &session.dataframe;
-            let lap_col = df.column("Lap").unwrap().f64().unwrap();
-            let dist_col = df.column("Distance_Derived").unwrap().f64().unwrap();
-            let time_col = df.column("SessionTime").unwrap().f64().unwrap();
+            let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
+            let dist_col_opt = df.column("Distance_Derived").ok().and_then(|c| c.f64().ok());
+            let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
+            if lap_col_opt.is_none() || dist_col_opt.is_none() || time_col_opt.is_none() { return Err("Lap/Dist/Time missing".into()); }
+            let lap_col = lap_col_opt.unwrap();
+            let dist_col = dist_col_opt.unwrap();
+            let time_col = time_col_opt.unwrap();
             let lat_col = df.column("Lat").ok().and_then(|c| c.f64().ok());
             let lon_col = df.column("Lon").ok().and_then(|c| c.f64().ok());
 
             let mut lat0 = 0.0;
             let mut lon0 = 0.0;
+            let mut wm0 = [0.0, 0.0];
             if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
                 lat0 = la.get(0).unwrap_or(0.0);
                 lon0 = lo.get(0).unwrap_or(0.0);
+                let (wx, wy) = crate::signals::mapbox::wgs84_to_web_mercator(lon0, lat0);
+                wm0 = [wx, wy];
             }
 
-            let r_earth = 6378137.0; // Earth radius in meters
-            let lat0_rad = lat0 * std::f64::consts::PI / 180.0;
-            let lon0_rad = lon0 * std::f64::consts::PI / 180.0;
+            // Removed r_earth, lat0_rad, and lon0_rad since we now use wgs84_to_web_mercator
+            
+            let mut min_lat = f64::MAX;
+            let mut max_lat = f64::MIN;
+            let mut min_lon = f64::MAX;
+            let mut max_lon = f64::MIN;
+            
+            if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
+                for i in 0..n {
+                    let lat_val = la.get(i).unwrap_or(0.0);
+                    let lon_val = lo.get(i).unwrap_or(0.0);
+                    if lat_val != 0.0 && lon_val != 0.0 {
+                        if lat_val < min_lat { min_lat = lat_val; }
+                        if lat_val > max_lat { max_lat = lat_val; }
+                        if lon_val < min_lon { min_lon = lon_val; }
+                        if lon_val > max_lon { max_lon = lon_val; }
+                    }
+                }
+            }
 
             for &l_num in &unique_laps {
                 let mut dists = Vec::new();
@@ -499,15 +548,34 @@ impl LoadedSession {
                         let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
                         let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
                         
-                        let lat_rad = lat * std::f64::consts::PI / 180.0;
-                        let lon_rad = lon * std::f64::consts::PI / 180.0;
-                        
-                        let x = r_earth * (lon_rad - lon0_rad) * lat0_rad.cos();
-                        let y = r_earth * (lat_rad - lat0_rad);
+                        // Use exact Web Mercator projection so the trace perfectly matches the satellite map!
+                        let (wm_x, wm_y) = crate::signals::mapbox::wgs84_to_web_mercator(lon, lat);
+                        let x = wm_x - wm0[0];
+                        let y = wm_y - wm0[1];
                         xs.push(x);
                         ys.push(y);
                     }
                 }
+
+                // Fallback: if the lap was found in the headers but has no matching samples 
+                // (e.g. short test files, out-laps, or glitching Lap channels), we populate it with ALL samples
+                // to prevent rendering panics from empty arrays!
+                if dists.is_empty() {
+                    for i in 0..n {
+                        dists.push(dist_col.get(i).unwrap_or(0.0));
+                        times.push(time_col.get(i).unwrap_or(0.0));
+                        let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+                        let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+                        
+                        // Use exact Web Mercator projection so the trace perfectly matches the satellite map!
+                        let (wm_x, wm_y) = crate::signals::mapbox::wgs84_to_web_mercator(lon, lat);
+                        let x = wm_x - wm0[0];
+                        let y = wm_y - wm0[1];
+                        xs.push(x);
+                        ys.push(y);
+                    }
+                }
+
                 if !dists.is_empty() {
                     let base_dist = dists[0];
                     let base_time = times[0];
@@ -551,7 +619,20 @@ impl LoadedSession {
                 }
             }
 
-            LoadedSession {
+            let mut track_bounds = None;
+            if min_lat != f64::MAX {
+                track_bounds = Some((min_lon, min_lat, max_lon, max_lat));
+            }
+
+            Ok(LoadedSession {
+                track_bounds,
+                bg_image_bytes: None,
+                bg_bounds: None,
+                bg_texture: None,
+                fg_image_bytes: None,
+                fg_bounds: None,
+                fg_texture: None,
+                map_origin: Some(wm0),
                 file_name,
                 session,
                 front_pts_cache: front,
@@ -571,7 +652,7 @@ impl LoadedSession {
                 sectors: sectors_cache,
                 sector_bests: bests,
                 lap_data_cache: data_cache,
-            }
+            })
         }
     pub fn get_cache_slice(&self, name: &str) -> &[[f64; 2]] {
         match name {
@@ -631,17 +712,31 @@ impl OpenDavApp {
 
 impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(feature = "dev_tools")]
+        {
+            let dt = ctx.input(|i| i.stable_dt).min(0.1);
+            self.dev_metrics.fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+            self.dev_metrics.frame_time_ms = dt * 1000.0;
+            self.dev_metrics.history_dt.push(dt);
+            if self.dev_metrics.history_dt.len() > 25 {
+                self.dev_metrics.history_dt.remove(0);
+            }
+        }
+
+        let prev_page = self.previous_page;
+        if prev_page.is_some() && prev_page != Some(self.active_page) {
+            self.reset_bounds_flag = true;
+        }
+        self.previous_page = Some(self.active_page);
+
         // --- DYNAMIC BRAND THEMING SWITCHER ---
         let mut style = (*ctx.global_style()).clone();
         
-        // Sync egui's global theme memory with our settings
-        let egui_is_dark = style.visuals.dark_mode;
-        if egui_is_dark != self.settings.dark_mode {
-            self.settings.dark_mode = egui_is_dark;
-            self.settings.save();
-        }
-        
+        // Ensure egui's visuals match our settings
         let is_dark = self.settings.dark_mode;
+        if style.visuals.dark_mode != is_dark {
+            style.visuals = if is_dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+        }
         
         if is_dark {
             style.visuals.window_fill = DARK_BG_COLOR;
@@ -744,6 +839,12 @@ impl eframe::App for OpenDavApp {
                 });
             }
         }
+
+        #[cfg(feature = "dev_tools")]
+        {
+            crate::dev_tools::draw_overlay(ctx, &mut self.dev_metrics);
+            ctx.request_repaint(); // continuously repaint when dev tools are shown for live stats
+        }
     }
 
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
@@ -787,31 +888,68 @@ fn main() -> eframe::Result<()> {
 
 impl OpenDavApp {
     pub fn load_telemetry_file(&mut self, path: &std::path::Path) {
-        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         self.active_file = Some(file_name.clone());
-        match crate::data::ibt_parser::parse_ibt_file(path.to_str().unwrap()) {
+        match crate::data::ibt_parser::parse_ibt_file(path.to_str().unwrap_or("")) {
             Ok(parsed_session) => {
                 self.session_loaded = true;
                 crate::signals::processing::trigger_track_map_download(parsed_session.track_id);
                 
-                let new_session = crate::LoadedSession::new(file_name, parsed_session, self.settings.corner_merge_threshold);
-                self.sessions.push(new_session);
-                
-                let new_idx = self.sessions.len() - 1;
-                self.primary_session_idx = new_idx;
-                
-                let fastest = crate::signals::processing::get_fastest_lap(&self.sessions[new_idx].session.lap_times);
-                self.selected_lap = if fastest > 0 { Some((new_idx, fastest)) } else { None };
-                
-                self.cursor_x = None;
-                self.update_sector_deltas();
-                self.reset_bounds_flag = true;
+                match crate::LoadedSession::new(file_name, parsed_session, self.settings.corner_merge_threshold, &self.settings.mapbox_api_key) {
+                    Ok(new_session) => {
+                        self.sessions.push(new_session);
+                        let new_idx = self.sessions.len() - 1;
+                        self.primary_session_idx = new_idx;
+                        let fastest = crate::signals::processing::get_fastest_lap(&self.sessions[new_idx].session.lap_times);
+                        self.selected_lap = if fastest > 0 { Some((new_idx, fastest)) } else { None };
+                        self.cursor_x = None;
+                        self.update_sector_deltas();
+                        self.reset_bounds_flag = true;
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to initialize session: {}", e);
+                    }
+                }
                 
                 // Automatically switch to Dashboard if loaded successfully
                 self.active_page = ActivePage::OpenDav;
             }
             Err(e) => {
                 eprintln!("Error parsing .ibt file: {}", e);
+            }
+        }
+    }
+}
+
+impl LoadedSession {
+    pub fn fetch_satellite_maps(&mut self, mapbox_api_key: &str) {
+        if let Some((min_lon, min_lat, max_lon, max_lat)) = self.track_bounds {
+            let track_id = self.session.track_id;
+            let mapbox_path = std::path::Path::new("assets/maps").join(format!("{}_dark.png", track_id));
+            let google_path = std::path::Path::new("assets/maps").join(format!("{}_google.png", track_id));
+            
+            let fetch_result = if mapbox_path.exists() {
+                crate::signals::mapbox::fetch_mapbox_image(mapbox_api_key, track_id, min_lon, min_lat, max_lon, max_lat, 16)
+            } else if google_path.exists() {
+                crate::signals::google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, 16)
+            } else {
+                if !mapbox_api_key.trim().is_empty() {
+                    let res = crate::signals::mapbox::fetch_mapbox_image(mapbox_api_key, track_id, min_lon, min_lat, max_lon, max_lat, 16);
+                    if res.is_ok() {
+                        res
+                    } else {
+                        crate::signals::google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, 16)
+                    }
+                } else {
+                    crate::signals::google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, 16)
+                }
+            };
+            
+            if let Ok((fg_b, fg_bnds, bg_b, bg_bnds)) = fetch_result {
+                self.fg_image_bytes = Some(fg_b);
+                self.fg_bounds = Some(fg_bnds);
+                self.bg_image_bytes = bg_b;
+                self.bg_bounds = bg_bnds;
             }
         }
     }

@@ -528,7 +528,7 @@ impl OpenDavApp {
                         }
                         
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new("v0.8.0-rs").color(egui::Color32::DARK_GRAY).small());
+                            ui.label(egui::RichText::new("v0.9.0-rs").color(egui::Color32::DARK_GRAY).small());
                         });
                     });
                 });
@@ -618,7 +618,11 @@ impl OpenDavApp {
                         }
                         ui.separator();
                     }
-                    egui::widgets::global_theme_preference_switch(ui);
+                    let theme_icon = if self.settings.dark_mode { "🌙" } else { "☀️" };
+                    if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
+                        self.settings.dark_mode = !self.settings.dark_mode;
+                        self.settings.save();
+                    }
                     
                     // Tiny little uppercase letter T button right next to the theme switcher, only visible in Graphs page
                     if self.active_page == ActivePage::Graphs {

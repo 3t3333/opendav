@@ -115,6 +115,13 @@ impl OpenDavApp {
     }
 
     pub fn draw_motec_plot(&mut self, ui: &mut egui::Ui, plot_id: &str, config: &WorksheetConfig, is_tab_switch: bool) {
+        #[cfg(feature = "dev_tools")]
+        let debug_start_time = std::time::Instant::now();
+        #[cfg(feature = "dev_tools")]
+        let debug_pts_rendered = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        #[cfg(feature = "dev_tools")]
+        let debug_pts_culled = std::rc::Rc::new(std::cell::Cell::new(0usize));
+
         if self.sessions.is_empty() { return; }
         let loaded = &self.sessions[self.primary_session_idx];
         if loaded.front_pts_cache.is_empty() { return; }
@@ -318,6 +325,11 @@ impl OpenDavApp {
         let show_chart_deltas = self.show_chart_deltas;
         let sector_deltas = self.sector_deltas.clone();
 
+        #[cfg(feature = "dev_tools")]
+        let debug_pts_rendered_clone = debug_pts_rendered.clone();
+        #[cfg(feature = "dev_tools")]
+        let debug_pts_culled_clone = debug_pts_culled.clone();
+
         plot.show(ui, |plot_ui| {
 
             // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
@@ -386,7 +398,16 @@ impl OpenDavApp {
                 }.min(pts.len());
                 let slice = &pts[start_idx..end_idx];
                 let m = slice.len();
+                
+                #[cfg(feature = "dev_tools")]
+                {
+                    debug_pts_culled_clone.set(debug_pts_culled_clone.get() + (pts.len() - m));
+                }
+
                 if m <= 2000 {
+                    #[cfg(feature = "dev_tools")]
+                    debug_pts_rendered_clone.set(debug_pts_rendered_clone.get() + m);
+
                     slice.to_vec().into()
                 } else {
                     let stride = m / 1000;
@@ -427,6 +448,13 @@ impl OpenDavApp {
                         idx += stride;
                     }
                     downsampled.push(slice[m - 1]);
+
+                    #[cfg(feature = "dev_tools")]
+                    {
+                        debug_pts_rendered_clone.set(debug_pts_rendered_clone.get() + downsampled.len());
+                        debug_pts_culled_clone.set(debug_pts_culled_clone.get() + (m - downsampled.len()));
+                    }
+
                     downsampled.into()
                 }
             };
@@ -499,6 +527,11 @@ impl OpenDavApp {
                     
                     for &(lap_num, start_t, end_t) in lap_ranges {
                         if end_t >= min_visible_x && start_t <= max_visible_x {
+                            let is_selected_lap = selected_lap.map(|(_, l)| l) == Some(lap_num);
+                            if visible_width > 200.0 && !is_selected_lap {
+                                continue;
+                            }
+                            
                             let offset = start_t - ref_start;
                             
                             for lane in &lanes {
@@ -528,6 +561,11 @@ impl OpenDavApp {
                     
                     for &(lap_num, start_t, end_t) in lap_ranges {
                         if end_t >= min_visible_x && start_t <= max_visible_x {
+                            let is_selected_lap = selected_lap.map(|(_, l)| l) == Some(lap_num);
+                            if visible_width > 200.0 && !is_selected_lap {
+                                continue;
+                            }
+                            
                             let offset = start_t - ref_start;
                             
                             for lane in &lanes {
@@ -755,5 +793,12 @@ impl OpenDavApp {
         self.is_dragging_ticker = is_dragging_ticker;
         self.is_highlight_active = is_highlight_active;
         self.highlight_start = highlight_start;
+
+        #[cfg(feature = "dev_tools")]
+        {
+            self.dev_metrics.graph_render_time_ms = debug_start_time.elapsed().as_secs_f32() * 1000.0;
+            self.dev_metrics.points_rendered = debug_pts_rendered.get();
+            self.dev_metrics.points_culled = debug_pts_culled.get();
+        }
     }
 }
