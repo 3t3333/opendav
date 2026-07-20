@@ -331,11 +331,16 @@ impl OpenDavApp {
         let debug_pts_culled_clone = debug_pts_culled.clone();
 
         plot.show(ui, |plot_ui| {
+            // B. READ ACTIVE VIEWPORT COORDS
+            let active_bounds = plot_ui.plot_bounds();
+            let min_visible_x = active_bounds.min()[0];
+            let max_visible_x = active_bounds.max()[0];
+            let visible_width = max_visible_x - min_visible_x;
 
             // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
             if plot_ui.response().double_clicked() {
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                    let d_click_x = pointer_pos.x.clamp(0.0, max_time);
+                    let d_click_x = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     highlight_start = Some(d_click_x);
                     cursor_x = Some(d_click_x);
                     is_highlight_active = true;
@@ -376,11 +381,7 @@ impl OpenDavApp {
                 reset_bounds_flag = false;
             }
 
-            // B. READ ACTIVE VIEWPORT COORDS
-            let active_bounds = plot_ui.plot_bounds();
-            let min_visible_x = active_bounds.min()[0];
-            let max_visible_x = active_bounds.max()[0];
-            let visible_width = max_visible_x - min_visible_x;
+
 
             // Commit viewport sync metrics back to local copy state
             visible_x_range = Some((min_visible_x, max_visible_x));
@@ -704,7 +705,7 @@ impl OpenDavApp {
 
             if plot_ui.response().dragged() {
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                    let click_pos = pointer_pos.x.clamp(0.0, max_time);
+                    let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     if is_highlight_active {
                         if !plot_ui.response().double_clicked() {
                             if let Some(x_start) = highlight_start {
@@ -736,7 +737,7 @@ impl OpenDavApp {
 
             if plot_ui.response().clicked() {
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                    let click_pos = pointer_pos.x.clamp(0.0, max_time);
+                    let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     if is_highlight_active {
                         if !plot_ui.response().double_clicked() {
                             if let Some(x_start) = highlight_start {
