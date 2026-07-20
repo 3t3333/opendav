@@ -4,7 +4,6 @@
 /assets/MoTeC_example_of_time_chart_time_stamps.png
 /assets/examplecompariosnlapMoTeC.png
 /assets/Debug*.mp4
-/docs/  
 
 
 !/Cargo.toml
@@ -41,5 +40,6 @@ ehthumbs.db
 /Releases/
 /bin/
 / a s s e t s / m a p s / 
+/docs/
  
  
