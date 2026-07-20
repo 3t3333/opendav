@@ -104,6 +104,16 @@ impl OpenDavApp {
         let ref_cyan_lap = self.ref_lap_cyan.and_then(|(s_idx, num)| self.sessions[s_idx].lap_data_cache.iter().find(|l| l.lap_num == num));
         let ref_white_lap = self.ref_lap_white.and_then(|(s_idx, num)| self.sessions[s_idx].lap_data_cache.iter().find(|l| l.lap_num == num));
         
+        let primary_origin = loaded.map_origin.unwrap_or([0.0, 0.0]);
+        let cyan_offset = self.ref_lap_cyan.and_then(|(s_idx, _)| {
+            let o = self.sessions[s_idx].map_origin.unwrap_or([0.0, 0.0]);
+            Some([o[0] - primary_origin[0], o[1] - primary_origin[1]])
+        }).unwrap_or([0.0, 0.0]);
+        let white_offset = self.ref_lap_white.and_then(|(s_idx, _)| {
+            let o = self.sessions[s_idx].map_origin.unwrap_or([0.0, 0.0]);
+            Some([o[0] - primary_origin[0], o[1] - primary_origin[1]])
+        }).unwrap_or([0.0, 0.0]);
+        
         let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
         let show_deltas = self.show_sector_deltas && ref_active;
 
@@ -253,8 +263,8 @@ impl OpenDavApp {
                 let rotate_point = |x: f64, y: f64| -> [f64; 2] {
                     [x * cos_a - y * sin_a, x * sin_a + y * cos_a]
                 };
-                let rotate_segments = |segs: Vec<Vec<[f64; 2]>>| -> Vec<Vec<[f64; 2]>> {
-                    segs.into_iter().map(|line| line.into_iter().map(|p| rotate_point(p[0], p[1])).collect()).collect()
+                let rotate_segments = |segs: Vec<Vec<[f64; 2]>>, offset: [f64; 2]| -> Vec<Vec<[f64; 2]>> {
+                    segs.into_iter().map(|line| line.into_iter().map(|p| rotate_point(p[0] + offset[0], p[1] + offset[1])).collect()).collect()
                 };
 
                 let mut min_x = f64::MAX;
@@ -378,9 +388,9 @@ impl OpenDavApp {
                     if let Some(lap) = ref_cyan_lap {
                         let color = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 120, 136) };
                         let segments = if self.magnify_line_deltas {
-                            rotate_segments(get_magnified_lap_segments(lap, active_lap, self.magnifier_multiplier))
+                            rotate_segments(get_magnified_lap_segments(lap, active_lap, self.magnifier_multiplier), cyan_offset)
                         } else {
-                            rotate_segments(get_lap_segments(lap))
+                            rotate_segments(get_lap_segments(lap), cyan_offset)
                         };
                         for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
                             plot_ui.line(Line::new(format!("Ref Lap {} (Cyan) - Seg {}", self.ref_lap_cyan.unwrap().1, seg_idx), PlotPoints::from(seg_pts))
@@ -393,9 +403,9 @@ impl OpenDavApp {
                     if let Some(lap) = ref_white_lap {
                         let color = if is_dark { egui::Color32::WHITE } else { egui::Color32::from_rgb(100, 100, 100) };
                         let segments = if self.magnify_line_deltas {
-                            rotate_segments(get_magnified_lap_segments(lap, active_lap, self.magnifier_multiplier))
+                            rotate_segments(get_magnified_lap_segments(lap, active_lap, self.magnifier_multiplier), white_offset)
                         } else {
-                            rotate_segments(get_lap_segments(lap))
+                            rotate_segments(get_lap_segments(lap), white_offset)
                         };
                         for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
                             plot_ui.line(Line::new(format!("Ref Lap {} (White) - Seg {}", self.ref_lap_white.unwrap().1, seg_idx), PlotPoints::from(seg_pts))
@@ -419,7 +429,7 @@ impl OpenDavApp {
                                 if is_dark { egui::Color32::from_rgb(150, 150, 150) } else { egui::Color32::from_rgb(100, 100, 100) }
                             };
 
-                            let sector_segments = rotate_segments(get_sector_segments(active_lap, sector.start_dist, sector.end_dist));
+                            let sector_segments = rotate_segments(get_sector_segments(active_lap, sector.start_dist, sector.end_dist), [0.0, 0.0]);
                             for seg_pts in sector_segments.into_iter() {
                                 // Empty name because we render the labels manually below, AND we have the side panel legend!
                                 plot_ui.line(Line::new("", PlotPoints::from(seg_pts))
@@ -430,7 +440,7 @@ impl OpenDavApp {
                         }
                     } else {
                         let active_color = ACCENT_COLOR;
-                        let active_segments = rotate_segments(get_lap_segments(active_lap));
+                        let active_segments = rotate_segments(get_lap_segments(active_lap), [0.0, 0.0]);
                         for seg_pts in active_segments.into_iter() {
                             plot_ui.line(Line::new("", PlotPoints::from(seg_pts))
                                 .color(active_color)
@@ -561,7 +571,7 @@ impl OpenDavApp {
                             } else {
                                 get_lap_coord_at_time(w_lap, lap_rel_time)
                             };
-                            let pw = rotate_point(wx, wy);
+                            let pw = rotate_point(wx + white_offset[0], wy + white_offset[1]);
                             
                             // Rubber band
                             plot_ui.line(Line::new("White Rubber Band", vec![p_car, pw])
@@ -583,7 +593,7 @@ impl OpenDavApp {
                             } else {
                                 get_lap_coord_at_time(c_lap, lap_rel_time)
                             };
-                            let pc = rotate_point(cx_coord, cy_coord);
+                            let pc = rotate_point(cx_coord + cyan_offset[0], cy_coord + cyan_offset[1]);
                             
                             // Rubber band
                             plot_ui.line(Line::new("Cyan Rubber Band", vec![p_car, pc])

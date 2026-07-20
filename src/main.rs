@@ -723,6 +723,10 @@ impl eframe::App for OpenDavApp {
             if self.dev_metrics.history_dt.len() > 25 {
                 self.dev_metrics.history_dt.remove(0);
             }
+            
+            if ctx.input(|i| i.key_pressed(egui::Key::F10)) {
+                self.dev_metrics.show_overlay = !self.dev_metrics.show_overlay;
+            }
         }
 
         let prev_page = self.previous_page;
