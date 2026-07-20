@@ -714,6 +714,17 @@ impl OpenDavApp {
 
 impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // --- GLOBAL DRAG & DROP SUPPORT ---
+        let dropped_ibt_files: Vec<std::path::PathBuf> = ctx.input(|i| {
+            i.raw.dropped_files.iter()
+                .filter_map(|f| f.path.clone())
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ibt"))
+                .collect()
+        });
+        
+        for path in dropped_ibt_files {
+            self.load_telemetry_file(&path);
+        }
         #[cfg(feature = "dev_tools")]
         {
             let dt = ctx.input(|i| i.stable_dt).min(0.1);
