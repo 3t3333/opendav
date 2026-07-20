@@ -800,12 +800,28 @@ impl eframe::App for OpenDavApp {
                             if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == lap_num) {
                                 let (_, start_t, end_t) = loaded.lap_ranges[pos];
                                 
-                                let mut current_t = self.cursor_x.unwrap_or(start_t);
+                                let mut loop_start = start_t;
+                                let mut loop_end = end_t;
+                                
+                                if let Some((min_x, max_x)) = self.visible_x_range {
+                                    loop_start = f64::max(start_t, min_x);
+                                    loop_end = f64::min(end_t, max_x);
+                                }
+                                
+                                // Failsafe in case of zero or inverted bounds
+                                if loop_start >= loop_end - 0.001 {
+                                    loop_start = start_t;
+                                    loop_end = end_t;
+                                }
+                                
+                                let mut current_t = self.cursor_x.unwrap_or(loop_start);
                                 current_t += dt * self.playback_speed;
                                 
-                                // Seamless looping at the end of the selected lap
-                                if current_t > end_t {
-                                    current_t = start_t;
+                                // Seamless looping within the specified data section
+                                if current_t > loop_end {
+                                    current_t = loop_start;
+                                } else if current_t < loop_start {
+                                    current_t = loop_start;
                                 }
                                 
                                 self.cursor_x = Some(current_t);
