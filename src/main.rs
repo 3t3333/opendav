@@ -105,6 +105,7 @@ pub struct OpenDavApp {
 
     // Trigger flag to reset native plot boundaries
     pub reset_bounds_flag: bool,
+    pub reset_bounds_next_frame: u8,
 
     // Track if click drag initiated inside the bottom time-stamp ticker zone
     pub is_dragging_ticker: bool,
@@ -181,6 +182,7 @@ impl Default for OpenDavApp {
             selected_lap: None,
             cursor_x: None,
             reset_bounds_flag: false,
+            reset_bounds_next_frame: 0,
             is_dragging_ticker: false,
             is_highlight_active: false,
             highlight_start: None,
@@ -726,6 +728,7 @@ impl eframe::App for OpenDavApp {
         let prev_page = self.previous_page;
         if prev_page.is_some() && prev_page != Some(self.active_page) {
             self.reset_bounds_flag = true;
+            self.reset_bounds_next_frame = 3;
         }
         self.previous_page = Some(self.active_page);
 
@@ -771,6 +774,8 @@ impl eframe::App for OpenDavApp {
                 }
                 if finished {
                     self.app_state = AppState::Main;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                 } else {
                     self.draw_splash_screen(ctx, current_progress);
                 }
@@ -866,8 +871,9 @@ fn main() -> eframe::Result<()> {
     };
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1150.0, 720.0]) 
+        .with_inner_size([862.0, 540.0]) 
         .with_min_inner_size([800.0, 500.0])
+        .with_decorations(false) // Start frameless for splash screen
         .with_title("OpenDav");
 
     if let Some(icon) = icon_data {
@@ -905,6 +911,7 @@ impl OpenDavApp {
                         self.cursor_x = None;
                         self.update_sector_deltas();
                         self.reset_bounds_flag = true;
+                        self.reset_bounds_next_frame = 3;
                     },
                     Err(e) => {
                         eprintln!("Failed to initialize session: {}", e);

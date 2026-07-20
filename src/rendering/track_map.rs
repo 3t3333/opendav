@@ -621,6 +621,7 @@ impl OpenDavApp {
 
                 if plot_resp.response.double_clicked() {
                     self.reset_bounds_flag = true;
+                    self.reset_bounds_next_frame = 3;
                     self.auto_follow_track_map = false;
                 }
 
@@ -628,7 +629,12 @@ impl OpenDavApp {
         });
 
         if initial_reset_bounds {
-            self.reset_bounds_flag = false;
+            if self.reset_bounds_next_frame > 0 {
+                self.reset_bounds_next_frame -= 1;
+                ui.ctx().request_repaint();
+            } else {
+                self.reset_bounds_flag = false;
+            }
         }
     }
 }

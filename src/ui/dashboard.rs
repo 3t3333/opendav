@@ -313,7 +313,13 @@ impl OpenDavApp {
                                                 .inner_margin(egui::Margin::symmetric(6, 4))
                                                 .show(ui, |ui| {
                                                     ui.horizontal(|ui| {
-                                                        let btn = ui.selectable_label(is_primary, egui::RichText::new(&loaded_session.file_name).color(text_color).strong());
+                                                        let display_name = if loaded_session.file_name.len() > 22 {
+                                                            format!("{}...", &loaded_session.file_name[..19])
+                                                        } else {
+                                                            loaded_session.file_name.clone()
+                                                        };
+                                                        let btn = ui.selectable_label(is_primary, egui::RichText::new(&display_name).color(text_color).strong())
+                                                            .on_hover_text(&loaded_session.file_name);
                                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                                             if ui.button(egui::RichText::new("🗑").color(text_color)).clicked() {
                                                                 local_remove = true;
@@ -486,6 +492,7 @@ impl OpenDavApp {
                                         let (_, start_t, _end_t) = self.sessions[sl.0].lap_ranges[pos];
                                         self.cursor_x = Some(start_t);
                                         self.reset_bounds_flag = true;
+                                        self.reset_bounds_next_frame = 3;
                                     }
                                     state_changed = true;
                                 }
@@ -586,18 +593,29 @@ impl OpenDavApp {
                 if !self.sessions.is_empty() {
                     ui.separator();
                     let primary_file_name = &self.sessions[self.primary_session_idx].file_name;
+                    let display_name = if primary_file_name.len() > 22 {
+                        format!("{}...", &primary_file_name[..19])
+                    } else {
+                        primary_file_name.clone()
+                    };
                     
                     if self.sessions.len() == 1 {
-                        ui.label(egui::RichText::new(format!("File: {}", primary_file_name)).color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small());
+                        ui.label(egui::RichText::new(format!("File: {}", display_name)).color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small())
+                            .on_hover_text(primary_file_name);
                     } else {
                         let mut new_primary = None;
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Primary File:").color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small());
                             egui::ComboBox::from_id_source("top_primary_session_dropdown")
-                                .selected_text(egui::RichText::new(primary_file_name).small())
+                                .selected_text(egui::RichText::new(display_name).small())
                                 .show_ui(ui, |ui| {
                                     for (idx, session) in self.sessions.iter().enumerate() {
-                                        if ui.selectable_label(self.primary_session_idx == idx, &session.file_name).clicked() {
+                                        let s_display_name = if session.file_name.len() > 22 {
+                                            format!("{}...", &session.file_name[..19])
+                                        } else {
+                                            session.file_name.clone()
+                                        };
+                                        if ui.selectable_label(self.primary_session_idx == idx, &s_display_name).on_hover_text(&session.file_name).clicked() {
                                             new_primary = Some(idx);
                                         }
                                     }
@@ -615,6 +633,7 @@ impl OpenDavApp {
                     if self.session_loaded {
                         if ui.button("🔄 Reset Zoom").clicked() {
                             self.reset_bounds_flag = true;
+                            self.reset_bounds_next_frame = 3;
                         }
                         ui.separator();
                     }

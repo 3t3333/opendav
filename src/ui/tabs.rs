@@ -204,6 +204,7 @@ impl OpenDavApp {
                                     let (_, start_t, _end_t) = self.sessions[self.primary_session_idx].lap_ranges[pos];
                                     self.cursor_x = Some(start_t);
                                     self.reset_bounds_flag = true;
+                                    self.reset_bounds_next_frame = 3;
                                 }
                                 self.update_sector_deltas();
                             }
