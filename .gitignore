@@ -11,9 +11,6 @@
 !/.gitignore
 !/src/
 !/assets/
-!/docs/
-/docs/*
-!/docs/RELEASE_NOTES_v*.md
 !/opendav_desktop/
 !/bin/
 
