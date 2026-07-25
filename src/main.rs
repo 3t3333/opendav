@@ -24,6 +24,12 @@ pub enum ActivePage {
     Settings, // Application Settings
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum GraphsSidebarTab {
+    Details,
+    Values,
+}
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum SimGitTab {
     Dashboard,
@@ -148,9 +154,11 @@ pub struct OpenDavApp {
     pub magnifier_multiplier: f64,
     pub hidden_splits: std::collections::HashSet<String>,
     
-    // Timing Graphs state
+    // Timing Graphs & Sidebar state
     pub filter_large_sectors: bool,
     pub is_details_sidebar_open: bool,
+    pub active_sidebar_tab: Option<GraphsSidebarTab>,
+    pub channel_search_query: String,
     
     pub is_playing: bool,
     pub playback_speed: f64,
@@ -214,6 +222,8 @@ impl Default for OpenDavApp {
             hidden_splits: std::collections::HashSet::new(),
             filter_large_sectors: true,
             is_details_sidebar_open: true,
+            active_sidebar_tab: Some(GraphsSidebarTab::Details),
+            channel_search_query: String::new(),
             is_playing: false,
             playback_speed: 1.0,
             simgit_manager: crate::simgit::manager::SimGitManager::new(std::path::PathBuf::from("workspace")),

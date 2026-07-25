@@ -92,11 +92,11 @@ impl OpenDavApp {
     pub fn draw_sidebar(&mut self, ctx: &egui::Context) {
         let is_dark = ctx.style().visuals.dark_mode;
 
-        // 1. GRAPHS PAGE: ROTATED DETAILS TAB + COLLAPSIBLE LAP TIMELINE SIDEBAR
+        // 1. GRAPHS PAGE: DUAL ROTATED TABS (DETAILS & VALUES) + COLLAPSIBLE DRAWER
         if self.active_page == ActivePage::Graphs {
-            let is_open = self.is_details_sidebar_open;
+            let active_tab = self.active_sidebar_tab;
 
-            // A. Fixed 38px Far-Left Strip for rotated DETAILS button
+            // A. Fixed 38px Far-Left Strip for rotated tab buttons
             egui::SidePanel::left("details_tab_strip")
                 .resizable(false)
                 .exact_width(38.0)
@@ -104,63 +104,81 @@ impl OpenDavApp {
                 .show(ctx, |ui| {
                     ui.add_space(15.0);
                     
-                    let btn_size = egui::vec2(30.0, 110.0);
-                    let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    let is_hovered = response.hovered();
-                    
-                    let bg_color = if is_open {
-                        if is_dark { egui::Color32::from_rgb(32, 38, 46) } else { egui::Color32::from_rgb(195, 200, 208) }
-                    } else if is_hovered {
-                        if is_dark { egui::Color32::from_rgb(26, 30, 36) } else { egui::Color32::from_rgb(205, 210, 216) }
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
+                    let tab_configs = [
+                        (crate::GraphsSidebarTab::Details, "DETAILS"),
+                        (crate::GraphsSidebarTab::Values, "VALUES"),
+                    ];
 
-                    let stroke_color = if is_open {
-                        ACCENT_COLOR
-                    } else if is_hovered {
-                        if is_dark { egui::Color32::from_rgb(80, 90, 100) } else { egui::Color32::from_rgb(160, 170, 180) }
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
+                    for (tab_type, label_text) in tab_configs {
+                        let is_tab_active = active_tab == Some(tab_type);
+                        let btn_size = egui::vec2(30.0, 95.0);
+                        let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let is_hovered = response.hovered();
+                        
+                        let bg_color = if is_tab_active {
+                            if is_dark { egui::Color32::from_rgb(32, 38, 46) } else { egui::Color32::from_rgb(195, 200, 208) }
+                        } else if is_hovered {
+                            if is_dark { egui::Color32::from_rgb(26, 30, 36) } else { egui::Color32::from_rgb(205, 210, 216) }
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
 
-                    ui.painter().rect_filled(rect, 4.0, bg_color);
-                    if stroke_color != egui::Color32::TRANSPARENT {
-                        ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
-                    }
+                        let stroke_color = if is_tab_active {
+                            ACCENT_COLOR
+                        } else if is_hovered {
+                            if is_dark { egui::Color32::from_rgb(80, 90, 100) } else { egui::Color32::from_rgb(160, 170, 180) }
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
 
-                    // Rotated text mathematically centered inside rect
-                    let text_color = if is_open {
-                        ACCENT_COLOR
-                    } else if is_hovered {
-                        if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
-                    } else {
-                        if is_dark { egui::Color32::from_rgb(160, 170, 180) } else { egui::Color32::from_rgb(90, 100, 110) }
-                    };
+                        ui.painter().rect_filled(rect, 4.0, bg_color);
+                        if stroke_color != egui::Color32::TRANSPARENT {
+                            ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
+                        }
 
-                    let font_id = egui::FontId::proportional(11.0);
-                    let galley = ui.painter().layout_no_wrap("DETAILS".to_string(), font_id, text_color);
-                    let text_width = galley.size().x;
-                    let text_height = galley.size().y;
+                        let text_color = if is_tab_active {
+                            ACCENT_COLOR
+                        } else if is_hovered {
+                            if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                        } else {
+                            if is_dark { egui::Color32::from_rgb(160, 170, 180) } else { egui::Color32::from_rgb(90, 100, 110) }
+                        };
 
-                    let rotated_origin = egui::pos2(rect.center().x - text_height / 2.0, rect.center().y + text_width / 2.0);
-                    let mut shape = egui::epaint::TextShape::new(rotated_origin, galley, text_color);
-                    shape.angle = -std::f32::consts::FRAC_PI_2;
-                    ui.painter().add(egui::Shape::Text(shape));
+                        let font_id = egui::FontId::proportional(11.0);
+                        let galley = ui.painter().layout_no_wrap(label_text.to_string(), font_id, text_color);
+                        let text_width = galley.size().x;
+                        let text_height = galley.size().y;
 
-                    if response.clicked() {
-                        self.is_details_sidebar_open = !self.is_details_sidebar_open;
+                        let rotated_origin = egui::pos2(rect.center().x - text_height / 2.0, rect.center().y + text_width / 2.0);
+                        let mut shape = egui::epaint::TextShape::new(rotated_origin, galley, text_color);
+                        shape.angle = -std::f32::consts::FRAC_PI_2;
+                        ui.painter().add(egui::Shape::Text(shape));
+
+                        if response.clicked() {
+                            if is_tab_active {
+                                self.active_sidebar_tab = None;
+                                self.is_details_sidebar_open = false;
+                            } else {
+                                self.active_sidebar_tab = Some(tab_type);
+                                self.is_details_sidebar_open = true;
+                            }
+                        }
+
+                        ui.add_space(8.0);
                     }
                 });
 
-            // B. Working Lap Timeline Select Panel (exact 5a17a77 code inside a 270px panel!)
-            if is_open {
+            // B. Collapsible Drawer Panel
+            if let Some(tab) = active_tab {
                 egui::SidePanel::left("graphs_lap_sidebar")
                     .resizable(false)
                     .default_width(270.0) 
                     .show(ctx, |ui| {
                         ui.add_space(15.0);
-                        self.draw_graphs_sidebar_content(ui, is_dark);
+                        match tab {
+                            crate::GraphsSidebarTab::Details => self.draw_graphs_sidebar_content(ui, is_dark),
+                            crate::GraphsSidebarTab::Values => self.draw_values_sidebar_content(ui, is_dark),
+                        }
                     });
             }
             return;
@@ -583,6 +601,138 @@ impl OpenDavApp {
                         });
                     });
                 });
+    }
+
+    fn draw_values_sidebar_content(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        ui.vertical(|ui| {
+            ui.add_space(5.0);
+            if ui.button(egui::RichText::new("⬅  Back to OpenDAV").strong().color(ACCENT_COLOR)).clicked() {
+                self.active_page = ActivePage::OpenDav;
+            }
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            let select_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
+            ui.label(egui::RichText::new("LIVE TELEMETRY VALUES").color(select_hdr_color).size(10.0).strong());
+            ui.add_space(6.0);
+
+            // Channel Search Bar
+            ui.add(
+                egui::TextEdit::singleline(&mut self.channel_search_query)
+                    .hint_text("🔍 Search channels...")
+                    .desired_width(ui.available_width())
+            );
+            ui.add_space(8.0);
+
+            if !self.session_loaded || self.sessions.is_empty() {
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("No Telemetry Session Active").color(egui::Color32::GRAY).small());
+                ui.label(egui::RichText::new("Load an IBT file to inspect live channel values.").color(egui::Color32::GRAY).small());
+            } else {
+                let p_idx = self.primary_session_idx;
+                let session = &self.sessions[p_idx].session;
+                let df = &session.dataframe;
+
+                let row_idx = if let Ok(col) = df.column("SessionTime") {
+                    if let Ok(ca) = col.f64() {
+                        let cx = self.cursor_x.unwrap_or(0.0);
+                        match ca.cont_slice() {
+                            Ok(slice) => crate::signals::processing::get_closest_index(slice, cx),
+                            Err(_) => 0,
+                        }
+                    } else { 0 }
+                } else { 0 };
+
+                let query_lower = self.channel_search_query.to_lowercase();
+
+                let mut channel_names: Vec<String> = df.get_column_names()
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .filter(|name| query_lower.is_empty() || name.to_lowercase().contains(&query_lower))
+                    .collect();
+                channel_names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+                let total_cols = df.width();
+                let filtered_count = channel_names.len();
+
+                ui.label(egui::RichText::new(format!("Showing {} of {} channels", filtered_count, total_cols)).color(egui::Color32::GRAY).small());
+                ui.add_space(6.0);
+
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        for col_name in channel_names {
+                            if let Ok(col) = df.column(&col_name) {
+                                let val_str = if row_idx < col.len() {
+                                    match col.get(row_idx) {
+                                        Ok(polars::prelude::AnyValue::Float64(f)) => format!("{:.2}", f),
+                                        Ok(polars::prelude::AnyValue::Float32(f)) => format!("{:.2}", f),
+                                        Ok(polars::prelude::AnyValue::Int64(i)) => format!("{}", i),
+                                        Ok(polars::prelude::AnyValue::Int32(i)) => format!("{}", i),
+                                        Ok(polars::prelude::AnyValue::Int16(i)) => format!("{}", i),
+                                        Ok(polars::prelude::AnyValue::Int8(i)) => format!("{}", i),
+                                        Ok(polars::prelude::AnyValue::Boolean(b)) => if b { "true".to_string() } else { "false".to_string() },
+                                        Ok(polars::prelude::AnyValue::String(s)) => s.to_string(),
+                                        Ok(other) => format!("{:?}", other),
+                                        Err(_) => "N/A".to_string(),
+                                    }
+                                } else {
+                                    "N/A".to_string()
+                                };
+
+                                egui::Frame::none()
+                                    .fill(if is_dark { egui::Color32::from_rgb(26, 28, 34) } else { egui::Color32::from_rgb(238, 240, 244) })
+                                    .corner_radius(4.0)
+                                    .inner_margin(egui::Margin::symmetric(8, 5))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(&col_name).small().strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                ui.label(egui::RichText::new(val_str).small().strong().color(ACCENT_COLOR));
+                                            });
+                                        });
+                                    });
+                                ui.add_space(3.0);
+                            }
+                        }
+                    });
+                });
+            }
+
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let is_settings = self.active_page == ActivePage::Settings;
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                    let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+                    let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_settings);
+                    let acc = egui::Rgba::from(ACCENT_COLOR);
+                    let base = egui::Rgba::from(egui::Color32::DARK_GRAY);
+                    let gear_color: egui::Color32 = egui::Rgba::from_rgba_premultiplied(
+                        base.r() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.r() * sel_f,
+                        base.g() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.g() * sel_f,
+                        base.b() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.b() * sel_f,
+                        base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f
+                    ).into();
+                    
+                    ui.painter().text(
+                        rect.center(), 
+                        egui::Align2::CENTER_CENTER, 
+                        "⚙", 
+                        egui::FontId::proportional(22.0), 
+                        gear_color
+                    );
+                    
+                    if resp.on_hover_text("Settings").clicked() {
+                        self.active_page = ActivePage::Settings;
+                    }
+                    
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new("v0.9.0-rs").color(egui::Color32::DARK_GRAY).small());
+                    });
+                });
+            });
+        });
     }
 
     pub fn draw_top_panel(&mut self, ctx: &egui::Context) {
