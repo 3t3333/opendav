@@ -217,6 +217,8 @@ impl OpenDavApp {
                                     self.cursor_x = Some(start_t);
                                     self.reset_bounds_flag = true;
                                     self.reset_bounds_next_frame = 3;
+                                    self.reset_track_map_bounds_flag = true;
+                                    self.reset_track_map_bounds_next_frame = 3;
                                 }
                                 self.update_sector_deltas();
                             }
@@ -237,7 +239,11 @@ impl OpenDavApp {
         ui.add_space(4.0);
 
         ui.group(|ui| {
-            self.draw_interactive_track_map(ui, 340.0);
+            self.draw_interactive_track_map(
+                ui,
+                340.0,
+                crate::rendering::track_map::TrackMapPlacement::Inline,
+            );
         });
 
         ui.add_space(15.0);
@@ -251,6 +257,8 @@ impl OpenDavApp {
                     self.visible_x_range = None;
                     self.reset_bounds_flag = true;
                     self.reset_bounds_next_frame = 3;
+                    self.reset_track_map_bounds_flag = true;
+                    self.reset_track_map_bounds_next_frame = 3;
                 }
             }
         });
@@ -272,6 +280,8 @@ impl OpenDavApp {
                     self.visible_x_range = None;
                     self.reset_bounds_flag = true;
                     self.reset_bounds_next_frame = 3;
+                    self.reset_track_map_bounds_flag = true;
+                    self.reset_track_map_bounds_next_frame = 3;
                 }
             }
         }
@@ -311,18 +321,7 @@ impl OpenDavApp {
             _ => None,
         };
 
-        // MANUAL RESIZER (Bypasses TopBottomPanel bugs with egui::Plot)
-        let mut track_map_height = ui.ctx().data_mut(|d| d.get_temp::<f32>(egui::Id::new("tm_h")).unwrap_or(300.0));
-        let max_h = ui.available_height() - 150.0;
-        track_map_height = track_map_height.clamp(150.0, max_h.max(150.0));
-
-        let graphs_height = if self.show_graphs_track_map {
-            (ui.available_height() - track_map_height - 8.0).max(100.0)
-        } else {
-            ui.available_height()
-        };
-
-        ui.allocate_ui(egui::vec2(ui.available_width(), graphs_height), |ui| {
+        ui.allocate_ui(ui.available_size(), |ui| {
             if let Some(cfg) = &config {
                 let canvas_id = match self.active_worksheet {
                     WorksheetTab::Driver => "basic_worksheet_canvas",
@@ -341,32 +340,6 @@ impl OpenDavApp {
             }
         });
 
-        if self.show_graphs_track_map {
-            ui.add_space(2.0);
-            let resizer = ui.allocate_response(egui::vec2(ui.available_width(), 4.0), egui::Sense::drag());
-            
-            // Draw a subtle line for the splitter
-            let rect = resizer.rect;
-            let visual_color = if resizer.hovered() || resizer.dragged() {
-                egui::Color32::from_rgb(100, 150, 255)
-            } else {
-                egui::Color32::from_rgb(80, 80, 80)
-            };
-            ui.painter().rect_filled(rect, 0.0, visual_color);
-
-            if resizer.dragged() {
-                track_map_height -= resizer.drag_delta().y;
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("tm_h"), track_map_height));
-            }
-            if resizer.hovered() || resizer.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-            }
-            ui.add_space(2.0);
-            
-            ui.allocate_ui(egui::vec2(ui.available_width(), track_map_height), |ui| {
-                self.draw_interactive_track_map(ui, track_map_height);
-            });
-        }
     }
 
     pub fn draw_reports_page(&mut self, ui: &mut egui::Ui, is_dark: bool) {
@@ -518,7 +491,11 @@ impl OpenDavApp {
                 ui.add_space(8.0);
                 ui.group(|ui| {
                     let map_height = ui.available_height().max(300.0);
-                    self.draw_interactive_track_map(ui, map_height);
+                    self.draw_interactive_track_map(
+                        ui,
+                        map_height,
+                        crate::rendering::track_map::TrackMapPlacement::Inline,
+                    );
                 });
             });
         }

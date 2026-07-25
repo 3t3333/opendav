@@ -92,7 +92,7 @@ impl OpenDavApp {
     pub fn draw_sidebar(&mut self, ctx: &egui::Context) {
         let is_dark = ctx.style().visuals.dark_mode;
 
-        // 1. GRAPHS PAGE: DUAL ROTATED TABS (DETAILS & VALUES) + COLLAPSIBLE DRAWER
+        // 1. GRAPHS PAGE: WORKSPACE TABS + INDEPENDENT MAP TOGGLE
         if self.active_page == ActivePage::Graphs {
             let active_tab = self.active_sidebar_tab;
 
@@ -166,6 +166,59 @@ impl OpenDavApp {
 
                         ui.add_space(8.0);
                     }
+
+                    let is_map_active = self.show_graphs_track_map;
+                    let btn_size = egui::vec2(30.0, 95.0);
+                    let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    let is_hovered = response.hovered();
+
+                    let bg_color = if is_map_active {
+                        if is_dark { egui::Color32::from_rgb(32, 38, 46) } else { egui::Color32::from_rgb(195, 200, 208) }
+                    } else if is_hovered {
+                        if is_dark { egui::Color32::from_rgb(26, 30, 36) } else { egui::Color32::from_rgb(205, 210, 216) }
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let stroke_color = if is_map_active {
+                        ACCENT_COLOR
+                    } else if is_hovered {
+                        if is_dark { egui::Color32::from_rgb(80, 90, 100) } else { egui::Color32::from_rgb(160, 170, 180) }
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+
+                    ui.painter().rect_filled(rect, 4.0, bg_color);
+                    if stroke_color != egui::Color32::TRANSPARENT {
+                        ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
+                    }
+
+                    let text_color = if is_map_active {
+                        ACCENT_COLOR
+                    } else if is_hovered {
+                        if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                    } else if is_dark {
+                        egui::Color32::from_rgb(160, 170, 180)
+                    } else {
+                        egui::Color32::from_rgb(90, 100, 110)
+                    };
+                    let font_id = egui::FontId::proportional(11.0);
+                    let galley = ui.painter().layout_no_wrap("MAP".to_owned(), font_id, text_color);
+                    let rotated_origin = egui::pos2(
+                        rect.center().x - galley.size().y / 2.0,
+                        rect.center().y + galley.size().x / 2.0,
+                    );
+                    let mut shape = egui::epaint::TextShape::new(rotated_origin, galley, text_color);
+                    shape.angle = -std::f32::consts::FRAC_PI_2;
+                    ui.painter().add(egui::Shape::Text(shape));
+
+                    if response.on_hover_text("Toggle Track Map").clicked() {
+                        self.show_graphs_track_map = !self.show_graphs_track_map;
+                        if self.show_graphs_track_map {
+                            self.graphs_track_map_rotation = std::f64::consts::FRAC_PI_2;
+                            self.reset_track_map_bounds_flag = true;
+                            self.reset_track_map_bounds_next_frame = 3;
+                        }
+                    }
                 });
 
             // B. Collapsible Drawer Panel
@@ -179,6 +232,30 @@ impl OpenDavApp {
                             crate::GraphsSidebarTab::Details => self.draw_graphs_sidebar_content(ui, is_dark),
                             crate::GraphsSidebarTab::Values => self.draw_values_sidebar_content(ui, is_dark),
                         }
+                    });
+            }
+
+            if self.show_graphs_track_map {
+                egui::SidePanel::left("graphs_track_map_panel")
+                    .resizable(true)
+                    .default_width(480.0)
+                    .width_range(320.0..=820.0)
+                    .frame(
+                        egui::Frame::none()
+                            .fill(if is_dark {
+                                egui::Color32::from_rgb(14, 16, 20)
+                            } else {
+                                egui::Color32::from_rgb(232, 234, 238)
+                            })
+                            .inner_margin(egui::Margin::same(8)),
+                    )
+                    .show(ctx, |ui| {
+                        let height = ui.available_height();
+                        self.draw_interactive_track_map(
+                            ui,
+                            height,
+                            crate::rendering::track_map::TrackMapPlacement::GraphsSidebar,
+                        );
                     });
             }
             return;
@@ -534,6 +611,8 @@ impl OpenDavApp {
                                 
                                 if let Some(idx) = new_primary_idx {
                                     self.primary_session_idx = idx;
+                                    self.reset_track_map_bounds_flag = true;
+                                    self.reset_track_map_bounds_next_frame = 3;
                                     state_changed = true;
                                 }
                                 if toggle_cyan_off {
@@ -557,6 +636,8 @@ impl OpenDavApp {
                                         self.cursor_x = Some(start_t);
                                         self.reset_bounds_flag = true;
                                         self.reset_bounds_next_frame = 3;
+                                        self.reset_track_map_bounds_flag = true;
+                                        self.reset_track_map_bounds_next_frame = 3;
                                     }
                                     state_changed = true;
                                 }
@@ -829,6 +910,8 @@ impl OpenDavApp {
                         if let Some(idx) = new_primary {
                             self.primary_session_idx = idx;
                             self.update_sector_deltas();
+                            self.reset_track_map_bounds_flag = true;
+                            self.reset_track_map_bounds_next_frame = 3;
                         }
                     }
 
@@ -867,6 +950,8 @@ impl OpenDavApp {
                         if ui.button("🔄 Reset Zoom").clicked() {
                             self.reset_bounds_flag = true;
                             self.reset_bounds_next_frame = 3;
+                            self.reset_track_map_bounds_flag = true;
+                            self.reset_track_map_bounds_next_frame = 3;
                         }
                         ui.separator();
                     }
@@ -874,18 +959,6 @@ impl OpenDavApp {
                     if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
                         self.settings.dark_mode = !self.settings.dark_mode;
                         self.settings.save();
-                    }
-                    
-                    // Tiny little uppercase letter T button right next to the theme switcher, only visible in Graphs page
-                    if self.active_page == ActivePage::Graphs {
-                        let t_text = if self.show_graphs_track_map {
-                            egui::RichText::new("T").strong().color(ACCENT_COLOR)
-                        } else {
-                            egui::RichText::new("T").strong()
-                        };
-                        if ui.add(egui::Button::new(t_text).frame(true)).on_hover_text("Toggle Track Map View").clicked() {
-                            self.show_graphs_track_map = !self.show_graphs_track_map;
-                        }
                     }
                 });
             });

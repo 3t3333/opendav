@@ -153,6 +153,8 @@ impl OpenDavApp {
         
         let max_time = loaded.front_pts_cache.last().unwrap()[0];
         let is_dark = ui.style().visuals.dark_mode;
+        // Dynamic HUD labels may overflow a narrow workspace, but must not resize the plot.
+        let plot_width = ui.available_width();
 
         // 1. EXTRACT RAW HUD METRICS AT PLAYBACK CURSOR INDEX (EXCLUSIVE ZERO-CONFLICT SCOPE!)
         let mut df_idx = 0;
@@ -311,10 +313,10 @@ impl OpenDavApp {
 
         // 4. INITIALIZE UNIFIED PLOT CANVAS
         let mut plot_height = ui.available_height() - 10.0;
-        let min_h = if self.show_graphs_track_map { 150.0 } else { 300.0 };
-        if plot_height < min_h { plot_height = min_h; }
+        if plot_height < 300.0 { plot_height = 300.0; }
 
         let mut plot = Plot::new(plot_id)
+            .width(plot_width)
             .height(plot_height)
             .allow_zoom([false, false])
             .allow_scroll([false, false])
@@ -410,6 +412,96 @@ impl OpenDavApp {
 
             // Commit viewport sync metrics back to local copy state
             visible_x_range = Some((min_visible_x, max_visible_x));
+
+            // Handle pointer input before rendering so manual scrubbing updates the cursor
+            // in the same frame, matching the playback update path.
+            if plot_ui.response().drag_started() {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    is_dragging_ticker = pointer_pos.y < 9.5;
+                }
+            }
+
+            if plot_ui.response().dragged() {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
+                    if is_highlight_active {
+                        if !plot_ui.response().double_clicked() {
+                            if let Some(x_start) = highlight_start {
+                                let zoom_min = f64::min(x_start, click_pos);
+                                let zoom_max = f64::max(x_start, click_pos);
+                                if (zoom_max - zoom_min).abs() > 0.1 {
+                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
+                                    cursor_x = Some(zoom_min);
+                                    visible_x_range = Some((zoom_min, zoom_max));
+                                }
+                                is_highlight_active = false;
+                                highlight_start = None;
+                            }
+                        }
+                    } else if is_dragging_ticker {
+                        let pixel_delta_x = plot_ui.ctx().input(|i| i.pointer.delta().x);
+                        let plot_width_pixels = plot_ui.response().rect.width();
+                        let pixels_per_second = (plot_width_pixels as f64) / visible_width;
+                        let seconds_delta = (pixel_delta_x as f64) / pixels_per_second;
+                        let new_min = (min_visible_x - seconds_delta).clamp(0.0, max_time - visible_width);
+                        let new_max = new_min + visible_width;
+                        plot_ui.set_plot_bounds_x(new_min..=new_max);
+                        visible_x_range = Some((new_min, new_max));
+                    } else {
+                        cursor_x = Some(click_pos);
+                    }
+                }
+            }
+
+            if plot_ui.response().clicked() {
+                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
+                    let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
+                    if is_highlight_active {
+                        if !plot_ui.response().double_clicked() {
+                            if let Some(x_start) = highlight_start {
+                                let zoom_min = f64::min(x_start, click_pos);
+                                let zoom_max = f64::max(x_start, click_pos);
+                                if (zoom_max - zoom_min).abs() > 0.1 {
+                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
+                                    cursor_x = Some(zoom_min);
+                                    visible_x_range = Some((zoom_min, zoom_max));
+                                }
+                                is_highlight_active = false;
+                                highlight_start = None;
+                            }
+                        }
+                    } else {
+                        cursor_x = Some(click_pos);
+                    }
+                }
+            }
+
+            if plot_ui.response().hovered() {
+                let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
+                if scroll.y.abs() > 1.5 {
+                    let is_zooming_in = scroll.y > 0.0;
+                    let zoom_factor = if is_zooming_in { 0.925 } else { 1.075 };
+                    let mut target_width = visible_width * zoom_factor;
+                    target_width = target_width.clamp(1.5, max_time);
+                    let center = if is_zooming_in { cursor_x.unwrap_or((min_visible_x + max_visible_x) / 2.0) } else { (min_visible_x + max_visible_x) / 2.0 };
+                    let half_width = target_width / 2.0;
+                    let mut new_min = center - half_width;
+                    let mut mut_new_max = center + half_width;
+                    if new_min < 0.0 {
+                        let overflow = 0.0 - new_min;
+                        new_min = 0.0;
+                        mut_new_max = (mut_new_max + overflow).min(max_time);
+                    } else if mut_new_max > max_time {
+                        let overflow = mut_new_max - max_time;
+                        mut_new_max = max_time;
+                        new_min = (new_min - overflow).max(0.0);
+                    }
+                    if new_min < mut_new_max {
+                        plot_ui.set_plot_bounds_x(new_min..=mut_new_max);
+                        visible_x_range = Some((new_min, mut_new_max));
+                    }
+                }
+            }
 
             // High-performance MinMax decimator closure (prevents aliasing/jumping spikes)
             let decimate_points = |pts: &[[f64; 2]]| -> PlotPoints {
@@ -746,95 +838,6 @@ impl OpenDavApp {
                 }
             }
 
-            // L. TIME DRAG DETECTION & SCRUBBING
-            if plot_ui.response().drag_started() {
-                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                    is_dragging_ticker = pointer_pos.y < 9.5;
-                }
-            }
-
-            if plot_ui.response().dragged() {
-                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                    let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
-                    if is_highlight_active {
-                        if !plot_ui.response().double_clicked() {
-                            if let Some(x_start) = highlight_start {
-                                let zoom_min = f64::min(x_start, click_pos);
-                                let zoom_max = f64::max(x_start, click_pos);
-                                if (zoom_max - zoom_min).abs() > 0.1 {
-                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
-                                    cursor_x = Some(zoom_min);
-                                    visible_x_range = Some((zoom_min, zoom_max));
-                                }
-                                is_highlight_active = false;
-                                highlight_start = None;
-                            }
-                        }
-                    } else if is_dragging_ticker {
-                        let pixel_delta_x = plot_ui.ctx().input(|i| i.pointer.delta().x);
-                        let plot_width_pixels = plot_ui.response().rect.width();
-                        let pixels_per_second = (plot_width_pixels as f64) / visible_width;
-                        let seconds_delta = (pixel_delta_x as f64) / pixels_per_second;
-                        let new_min = (min_visible_x - seconds_delta).clamp(0.0, max_time - visible_width);
-                        let new_max = new_min + visible_width;
-                        plot_ui.set_plot_bounds_x(new_min..=new_max);
-                        visible_x_range = Some((new_min, new_max));
-                    } else {
-                        cursor_x = Some(click_pos);
-                    }
-                }
-            }
-
-            if plot_ui.response().clicked() {
-                if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
-                    let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
-                    if is_highlight_active {
-                        if !plot_ui.response().double_clicked() {
-                            if let Some(x_start) = highlight_start {
-                                let zoom_min = f64::min(x_start, click_pos);
-                                let zoom_max = f64::max(x_start, click_pos);
-                                if (zoom_max - zoom_min).abs() > 0.1 {
-                                    plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
-                                    cursor_x = Some(zoom_min);
-                                    visible_x_range = Some((zoom_min, zoom_max));
-                                }
-                                is_highlight_active = false;
-                                highlight_start = None;
-                            }
-                        }
-                    } else {
-                        cursor_x = Some(click_pos);
-                    }
-                }
-            }
-
-            // M. SILKY-SMOOTH HIGH-PRECISION ZOOM WHEEL
-            if plot_ui.response().hovered() {
-                let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
-                if scroll.y.abs() > 1.5 {
-                    let is_zooming_in = scroll.y > 0.0;
-                    let zoom_factor = if is_zooming_in { 0.925 } else { 1.075 };
-                    let mut target_width = visible_width * zoom_factor;
-                    target_width = target_width.clamp(1.5, max_time);
-                    let center = if is_zooming_in { cursor_x.unwrap_or((min_visible_x + max_visible_x) / 2.0) } else { (min_visible_x + max_visible_x) / 2.0 };
-                    let half_width = target_width / 2.0;
-                    let mut new_min = center - half_width;
-                    let mut mut_new_max = center + half_width;
-                    if new_min < 0.0 {
-                        let overflow = 0.0 - new_min;
-                        new_min = 0.0;
-                        mut_new_max = (mut_new_max + overflow).min(max_time);
-                    } else if mut_new_max > max_time {
-                        let overflow = mut_new_max - max_time;
-                        mut_new_max = max_time;
-                        new_min = (new_min - overflow).max(0.0);
-                    }
-                    if new_min < mut_new_max {
-                        plot_ui.set_plot_bounds_x(new_min..=mut_new_max);
-                        visible_x_range = Some((new_min, mut_new_max));
-                    }
-                }
-            }
         });
 
         // 5. RESTORE COPIES BACK TO APP STATE IN CONSTANT TIME

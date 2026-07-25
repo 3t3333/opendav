@@ -6,14 +6,47 @@ use crate::signals::processing::{
     get_magnified_lap_segments, get_lap_distance_at_time, get_magnified_lap_coord
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackMapPlacement {
+    Inline,
+    GraphsSidebar,
+}
+
+impl TrackMapPlacement {
+    fn reset_rotation(self, data_aspect: f64, physical_aspect: f64) -> f64 {
+        match self {
+            Self::GraphsSidebar => std::f64::consts::FRAC_PI_2,
+            Self::Inline
+                if (physical_aspect > 1.0 && data_aspect < 1.0)
+                    || (physical_aspect < 1.0 && data_aspect > 1.0) =>
+            {
+                std::f64::consts::FRAC_PI_2
+            }
+            Self::Inline => 0.0,
+        }
+    }
+
+    fn plot_id(self) -> &'static str {
+        match self {
+            Self::Inline => "interactive_track_map_inline",
+            Self::GraphsSidebar => "interactive_track_map_graphs_sidebar",
+        }
+    }
+}
+
 impl OpenDavApp {
-    pub fn draw_interactive_track_map(&mut self, ui: &mut egui::Ui, height: f32) {
+    pub fn draw_interactive_track_map(
+        &mut self,
+        ui: &mut egui::Ui,
+        height: f32,
+        placement: TrackMapPlacement,
+    ) {
         if self.sessions.is_empty() || self.sessions[self.primary_session_idx].lap_data_cache.is_empty() {
             ui.label("No track map coordinates precomputed.");
             return;
         }
 
-        let initial_reset_bounds = self.reset_bounds_flag;
+        let initial_reset_bounds = self.reset_track_map_bounds_flag;
 
         if self.enable_satellite_map && self.sessions[self.primary_session_idx].bg_image_bytes.is_none() {
             let api_key = self.settings.mapbox_api_key.clone();
@@ -50,45 +83,38 @@ impl OpenDavApp {
             }
         }
         
-        let mut trigger_update_deltas = false;
-
-        // Draw checkbox bar at the top of the track map card
-        ui.horizontal_wrapped(|ui| {
-            let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
-            if ref_active {
-                ui.checkbox(&mut self.show_sector_deltas, egui::RichText::new("Sector Delta Overlays").strong());
-                ui.add_space(15.0);
-                ui.checkbox(&mut self.show_chart_deltas, egui::RichText::new("Time Series Charts Deltas").strong());
-            } else {
-                ui.add_enabled_ui(false, |ui| {
-                    let mut dummy = false;
-                    ui.checkbox(&mut dummy, egui::RichText::new("Sector Delta Overlays (Select Reference Lap in Graphs)").small());
+        if placement == TrackMapPlacement::Inline {
+            ui.horizontal_wrapped(|ui| {
+                let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
+                if ref_active {
+                    ui.checkbox(&mut self.show_sector_deltas, egui::RichText::new("Sector Delta Overlays").strong());
                     ui.add_space(15.0);
-                    ui.checkbox(&mut dummy, egui::RichText::new("Time Series Charts Deltas").small());
-                });
-            }
-            ui.add_space(15.0);
-            ui.checkbox(&mut self.show_all_splits, "Toggle All Splits");
-            ui.add_space(15.0);
-            if ui.checkbox(&mut self.enable_satellite_map, "Satellite Map (Beta)").changed() {
-                // Fetch is triggered automatically at the top of this function
-            }
-            ui.add_space(15.0);
-            ui.checkbox(&mut self.auto_follow_track_map, "Auto-Follow Car");
-            ui.add_space(15.0);
-            ui.checkbox(&mut self.auto_rotate_track_map, "Auto-Rotate");
-            if ref_active {
-                ui.add_space(15.0);
-                ui.checkbox(&mut self.magnify_line_deltas, "Magnifier");
-                if self.magnify_line_deltas {
-                    ui.add_space(5.0);
-                    ui.add(egui::Slider::new(&mut self.magnifier_multiplier, 1.0..=20.0).text("x").show_value(true));
+                    ui.checkbox(&mut self.show_chart_deltas, egui::RichText::new("Time Series Charts Deltas").strong());
+                } else {
+                    ui.add_enabled_ui(false, |ui| {
+                        let mut dummy = false;
+                        ui.checkbox(&mut dummy, egui::RichText::new("Sector Delta Overlays (Select Reference Lap in Graphs)").small());
+                        ui.add_space(15.0);
+                        ui.checkbox(&mut dummy, egui::RichText::new("Time Series Charts Deltas").small());
+                    });
                 }
-            }
-        });
-
-        if trigger_update_deltas {
-            self.update_lap_deltas();
+                ui.add_space(15.0);
+                ui.checkbox(&mut self.show_all_splits, "Toggle All Splits");
+                ui.add_space(15.0);
+                ui.checkbox(&mut self.enable_satellite_map, "Satellite Map (Beta)");
+                ui.add_space(15.0);
+                ui.checkbox(&mut self.auto_follow_track_map, "Auto-Follow Car");
+                ui.add_space(15.0);
+                ui.checkbox(&mut self.auto_rotate_track_map, "Auto-Rotate");
+                if ref_active {
+                    ui.add_space(15.0);
+                    ui.checkbox(&mut self.magnify_line_deltas, "Magnifier");
+                    if self.magnify_line_deltas {
+                        ui.add_space(5.0);
+                        ui.add(egui::Slider::new(&mut self.magnifier_multiplier, 1.0..=20.0).text("x").show_value(true));
+                    }
+                }
+            });
         }
         
         let loaded = &self.sessions[self.primary_session_idx];
@@ -121,13 +147,56 @@ impl OpenDavApp {
         
         let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
         let show_deltas = self.show_sector_deltas && ref_active;
+        let mut map_rotation = match placement {
+            TrackMapPlacement::Inline => self.track_map_rotation,
+            TrackMapPlacement::GraphsSidebar => self.graphs_track_map_rotation,
+        };
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            let plot_width = ui.available_width() - 200.0;
-            ui.allocate_ui(egui::vec2(190.0, height), |ui| {
+            let control_rail_width = if placement == TrackMapPlacement::GraphsSidebar { 160.0 } else { 190.0 };
+            let plot_width = ui.available_width() - control_rail_width - 10.0;
+            ui.allocate_ui(egui::vec2(control_rail_width, height), |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
+                        if placement == TrackMapPlacement::GraphsSidebar {
+                            ui.heading("Track Map");
+                            ui.add_space(8.0);
+
+                            ui.checkbox(&mut self.enable_satellite_map, "Satellite Map");
+                            ui.checkbox(&mut self.auto_follow_track_map, "Auto-Follow Car");
+                            ui.checkbox(&mut self.auto_rotate_track_map, "Auto-Rotate");
+                            ui.checkbox(&mut self.show_all_splits, "Show Track Splits");
+
+                            if ref_active {
+                                ui.checkbox(&mut self.show_sector_deltas, "Sector Deltas");
+                                ui.checkbox(&mut self.show_chart_deltas, "Chart Deltas");
+                                ui.checkbox(&mut self.magnify_line_deltas, "Line Magnifier");
+                                if self.magnify_line_deltas {
+                                    ui.add(
+                                        egui::Slider::new(&mut self.magnifier_multiplier, 1.0..=20.0)
+                                            .text("Scale")
+                                            .show_value(true),
+                                    );
+                                }
+                            } else {
+                                ui.add_enabled_ui(false, |ui| {
+                                    let mut disabled = false;
+                                    ui.checkbox(&mut disabled, "Sector Deltas");
+                                    ui.checkbox(&mut disabled, "Chart Deltas");
+                                });
+                                ui.label(
+                                    egui::RichText::new("Select a reference lap to enable delta overlays.")
+                                        .small()
+                                        .color(egui::Color32::GRAY),
+                                );
+                            }
+
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.add_space(10.0);
+                        }
+
                         ui.heading("Legend");
                         ui.add_space(8.0);
                         
@@ -205,7 +274,7 @@ impl OpenDavApp {
 
             // Plot taking the remaining space on the left
             ui.allocate_ui(egui::vec2(plot_width.max(100.0), height), |ui| {
-                let reset_bounds_flag = self.reset_bounds_flag;
+                let reset_bounds_flag = initial_reset_bounds;
                 
                 if reset_bounds_flag {
                     // Compute raw unrotated bounds to find aspect ratio of track
@@ -231,11 +300,7 @@ impl OpenDavApp {
                     let data_aspect = data_w / data_h.max(0.0001);
                     let phys_aspect = phys_w / phys_h.max(0.0001);
                     
-                    if (phys_aspect > 1.0 && data_aspect < 1.0) || (phys_aspect < 1.0 && data_aspect > 1.0) {
-                        self.track_map_rotation = std::f64::consts::PI / 2.0; // Rotate 90 degrees
-                    } else {
-                        self.track_map_rotation = 0.0;
-                    }
+                    map_rotation = placement.reset_rotation(data_aspect, phys_aspect);
                     self.auto_rotate_track_map = false;
                 }
 
@@ -257,12 +322,12 @@ impl OpenDavApp {
                         let dy = cx_y2 - cx_y1;
                         if dx.abs() > 1e-4 || dy.abs() > 1e-4 {
                             let heading = dy.atan2(dx);
-                            self.track_map_rotation = std::f64::consts::PI / 2.0 - heading;
+                            map_rotation = std::f64::consts::PI / 2.0 - heading;
                         }
                     }
                 }
 
-                let rot = self.track_map_rotation;
+                let rot = map_rotation;
                 let cos_a = rot.cos();
                 let sin_a = rot.sin();
                 let rotate_point = |x: f64, y: f64| -> [f64; 2] {
@@ -288,7 +353,7 @@ impl OpenDavApp {
                 }
                 
                 // Initialize the egui_plot
-                let plot = Plot::new("interactive_track_map_plot")
+                let plot = Plot::new(placement.plot_id())
                     .height(height)
                     .show_axes(false)
                     .show_grid(false)
@@ -356,7 +421,7 @@ impl OpenDavApp {
                                     texture,
                                     egui_plot::PlotPoint::new(rot_center[0], rot_center[1]),
                                     egui::vec2(size_x as f32, size_y as f32),
-                                ).rotate(self.track_map_rotation)
+                                ).rotate(map_rotation)
                             );
                         }
                         
@@ -384,7 +449,7 @@ impl OpenDavApp {
                                     texture,
                                     egui_plot::PlotPoint::new(rot_center[0], rot_center[1]),
                                     egui::vec2(size_x as f32, size_y as f32), // Standard Web Mercator Y-up mapping
-                                ).rotate(self.track_map_rotation)
+                                ).rotate(map_rotation)
                             );
                         }
                     }
@@ -635,21 +700,45 @@ impl OpenDavApp {
                 }
 
                 if plot_resp.response.double_clicked() {
-                    self.reset_bounds_flag = true;
-                    self.reset_bounds_next_frame = 3;
+                    self.reset_track_map_bounds_flag = true;
+                    self.reset_track_map_bounds_next_frame = 3;
                     self.auto_follow_track_map = false;
                 }
 
             });
         });
 
+        match placement {
+            TrackMapPlacement::Inline => self.track_map_rotation = map_rotation,
+            TrackMapPlacement::GraphsSidebar => self.graphs_track_map_rotation = map_rotation,
+        }
+
         if initial_reset_bounds {
-            if self.reset_bounds_next_frame > 0 {
-                self.reset_bounds_next_frame -= 1;
+            if self.reset_track_map_bounds_next_frame > 0 {
+                self.reset_track_map_bounds_next_frame -= 1;
                 ui.ctx().request_repaint();
             } else {
-                self.reset_bounds_flag = false;
+                self.reset_track_map_bounds_flag = false;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TrackMapPlacement;
+
+    #[test]
+    fn graphs_sidebar_reset_rotation_is_ninety_degrees() {
+        let rotation = TrackMapPlacement::GraphsSidebar.reset_rotation(2.0, 0.5);
+
+        assert_eq!(rotation, std::f64::consts::FRAC_PI_2);
+    }
+
+    #[test]
+    fn inline_reset_rotation_matches_landscape_track_to_portrait_view() {
+        let rotation = TrackMapPlacement::Inline.reset_rotation(2.0, 0.5);
+
+        assert_eq!(rotation, std::f64::consts::FRAC_PI_2);
     }
 }

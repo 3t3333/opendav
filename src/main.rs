@@ -117,6 +117,8 @@ pub struct OpenDavApp {
     // Trigger flag to reset native plot boundaries
     pub reset_bounds_flag: bool,
     pub reset_bounds_next_frame: u8,
+    pub reset_track_map_bounds_flag: bool,
+    pub reset_track_map_bounds_next_frame: u8,
 
     // Track if click drag initiated inside the bottom time-stamp ticker zone
     pub is_dragging_ticker: bool,
@@ -149,6 +151,7 @@ pub struct OpenDavApp {
     pub auto_follow_track_map: bool,
     pub auto_rotate_track_map: bool,
     pub track_map_rotation: f64,
+    pub graphs_track_map_rotation: f64,
     pub enable_satellite_map: bool,
     pub magnify_line_deltas: bool,
     pub magnifier_multiplier: f64,
@@ -198,6 +201,8 @@ impl Default for OpenDavApp {
             cursor_x: None,
             reset_bounds_flag: false,
             reset_bounds_next_frame: 0,
+            reset_track_map_bounds_flag: false,
+            reset_track_map_bounds_next_frame: 0,
             is_dragging_ticker: false,
             is_highlight_active: false,
             highlight_start: None,
@@ -216,6 +221,7 @@ impl Default for OpenDavApp {
             auto_follow_track_map: false,
             auto_rotate_track_map: false,
             track_map_rotation: 0.0,
+            graphs_track_map_rotation: std::f64::consts::FRAC_PI_2,
             enable_satellite_map: false,
             magnify_line_deltas: false,
             magnifier_multiplier: 10.0,
@@ -883,6 +889,8 @@ impl eframe::App for OpenDavApp {
         if prev_page.is_some() && prev_page != Some(self.active_page) {
             self.reset_bounds_flag = true;
             self.reset_bounds_next_frame = 3;
+            self.reset_track_map_bounds_flag = true;
+            self.reset_track_map_bounds_next_frame = 3;
         }
         self.previous_page = Some(self.active_page);
 
@@ -1083,6 +1091,8 @@ impl OpenDavApp {
         self.update_lap_deltas();
                         self.reset_bounds_flag = true;
                         self.reset_bounds_next_frame = 3;
+                        self.reset_track_map_bounds_flag = true;
+                        self.reset_track_map_bounds_next_frame = 3;
                     },
                     Err(e) => {
                         eprintln!("Failed to initialize session: {}", e);
