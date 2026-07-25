@@ -28,6 +28,7 @@ pub struct IbtSession {
     pub dataframe: DataFrame,
     pub lap_times: Vec<(i32, f64)>, // (Lap Number, Duration in Seconds)
     pub total_session_time: f64,
+    pub channel_units: std::collections::HashMap<String, String>,
     
     // Highly optimized raw caching vectors for real-time 300FPS GUI lookups
     pub distance: Vec<f64>,
@@ -338,6 +339,15 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
         .to_string_lossy()
         .to_string();
 
+    let mut channel_units = std::collections::HashMap::new();
+    for var in &var_headers {
+        channel_units.insert(var.name.clone(), var.unit.clone());
+    }
+    channel_units.insert("Distance_Derived".to_string(), "m".to_string());
+    channel_units.insert("FrontRideHeightSmooth".to_string(), "mm".to_string());
+    channel_units.insert("RearRideHeightSmooth".to_string(), "mm".to_string());
+    channel_units.insert("DynamicRake".to_string(), "mm".to_string());
+
     Ok(IbtSession {
         source_file: file_path_str,
         yaml_str: yaml_str.to_string(),
@@ -350,6 +360,7 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
         dataframe,
         lap_times,
         total_session_time,
+        channel_units,
         distance: dist_vec,
         front_raw: front_avg,
         rear_raw: rear_avg,

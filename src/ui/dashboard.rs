@@ -657,27 +657,30 @@ impl OpenDavApp {
                 let filtered_count = channel_names.len();
 
                 ui.label(egui::RichText::new(format!("Showing {} of {} channels", filtered_count, total_cols)).color(egui::Color32::GRAY).small());
-                ui.add_space(6.0);
+                let use_metric = self.settings.use_metric;
+                let empty_unit = String::new();
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.vertical(|ui| {
                         for col_name in channel_names {
+                            let raw_unit = session.channel_units.get(&col_name).unwrap_or(&empty_unit);
+
                             if let Ok(col) = df.column(&col_name) {
-                                let val_str = if row_idx < col.len() {
+                                let (val_str, unit_display) = if row_idx < col.len() {
                                     match col.get(row_idx) {
-                                        Ok(polars::prelude::AnyValue::Float64(f)) => format!("{:.2}", f),
-                                        Ok(polars::prelude::AnyValue::Float32(f)) => format!("{:.2}", f),
-                                        Ok(polars::prelude::AnyValue::Int64(i)) => format!("{}", i),
-                                        Ok(polars::prelude::AnyValue::Int32(i)) => format!("{}", i),
-                                        Ok(polars::prelude::AnyValue::Int16(i)) => format!("{}", i),
-                                        Ok(polars::prelude::AnyValue::Int8(i)) => format!("{}", i),
-                                        Ok(polars::prelude::AnyValue::Boolean(b)) => if b { "true".to_string() } else { "false".to_string() },
-                                        Ok(polars::prelude::AnyValue::String(s)) => s.to_string(),
-                                        Ok(other) => format!("{:?}", other),
-                                        Err(_) => "N/A".to_string(),
+                                        Ok(polars::prelude::AnyValue::Float64(f)) => format_channel_unit_val(&col_name, f, raw_unit, use_metric),
+                                        Ok(polars::prelude::AnyValue::Float32(f)) => format_channel_unit_val(&col_name, f as f64, raw_unit, use_metric),
+                                        Ok(polars::prelude::AnyValue::Int64(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
+                                        Ok(polars::prelude::AnyValue::Int32(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
+                                        Ok(polars::prelude::AnyValue::Int16(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
+                                        Ok(polars::prelude::AnyValue::Int8(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
+                                        Ok(polars::prelude::AnyValue::Boolean(b)) => (if b { "true".to_string() } else { "false".to_string() }, raw_unit.to_string()),
+                                        Ok(polars::prelude::AnyValue::String(s)) => (s.to_string(), raw_unit.to_string()),
+                                        Ok(other) => (format!("{:?}", other), raw_unit.to_string()),
+                                        Err(_) => ("N/A".to_string(), raw_unit.to_string()),
                                     }
                                 } else {
-                                    "N/A".to_string()
+                                    ("N/A".to_string(), raw_unit.to_string())
                                 };
 
                                 egui::Frame::none()
@@ -687,8 +690,16 @@ impl OpenDavApp {
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(&col_name).small().strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                                            if !unit_display.is_empty() {
+                                                ui.label(egui::RichText::new(format!("[{}]", unit_display)).size(9.0).color(egui::Color32::GRAY));
+                                            }
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                ui.label(egui::RichText::new(val_str).small().strong().color(ACCENT_COLOR));
+                                                let display_text = if !unit_display.is_empty() {
+                                                    format!("{} {}", val_str, unit_display)
+                                                } else {
+                                                    val_str
+                                                };
+                                                ui.label(egui::RichText::new(display_text).small().strong().color(ACCENT_COLOR));
                                             });
                                         });
                                     });
@@ -880,5 +891,73 @@ impl OpenDavApp {
             });
             ui.add_space(6.0);
         });
+    }
+}
+
+fn format_channel_unit_val(name: &str, raw_val: f64, raw_unit: &str, use_metric: bool) -> (String, String) {
+    let u_clean = raw_unit.trim();
+    let u_lower = u_clean.to_lowercase();
+    let name_lower = name.to_lowercase();
+
+    if u_lower == "m/s" || name_lower.contains("speed") || name_lower.contains("velocity") {
+        if use_metric {
+            let kmh = raw_val * 3.6;
+            (format!("{:.1}", kmh), "km/h".to_string())
+        } else {
+            let mph = raw_val * 2.23694;
+            (format!("{:.1}", mph), "mph".to_string())
+        }
+    } else if u_lower.contains('c') && (u_lower.contains("deg") || u_lower.contains('°') || u_clean == "C" || name_lower.contains("temp")) {
+        if use_metric {
+            (format!("{:.1}", raw_val), "°C".to_string())
+        } else {
+            let f = raw_val * 1.8 + 32.0;
+            (format!("{:.1}", f), "°F".to_string())
+        }
+    } else if u_lower == "kpa" || u_lower == "bar" || name_lower.contains("press") {
+        if use_metric {
+            if u_lower == "kpa" {
+                (format!("{:.1}", raw_val), "kPa".to_string())
+            } else {
+                (format!("{:.2}", raw_val), "bar".to_string())
+            }
+        } else {
+            let psi = if u_lower == "bar" {
+                raw_val * 14.5038
+            } else {
+                raw_val * 0.145038
+            };
+            (format!("{:.1}", psi), "psi".to_string())
+        }
+    } else if u_lower == "mm" || (u_lower == "m" && (name_lower.contains("height") || name_lower.contains("rake") || name_lower.contains("dist"))) {
+        if use_metric {
+            if u_lower == "m" {
+                (format!("{:.1}", raw_val), "m".to_string())
+            } else {
+                (format!("{:.2}", raw_val), "mm".to_string())
+            }
+        } else {
+            if u_lower == "m" {
+                let ft = raw_val * 3.28084;
+                (format!("{:.1}", ft), "ft".to_string())
+            } else {
+                let inches = raw_val * 0.0393701;
+                (format!("{:.3}", inches), "in".to_string())
+            }
+        }
+    } else if u_lower == "rad" || u_lower == "rad/s" {
+        let deg = raw_val * 57.2957795;
+        let unit_str = if u_lower.contains("/s") { "°/s" } else { "°" };
+        (format!("{:.1}", deg), unit_str.to_string())
+    } else if u_lower == "%" || u_clean == "%" {
+        let val_pct = if raw_val <= 1.0 && raw_val >= 0.0 { raw_val * 100.0 } else { raw_val };
+        (format!("{:.1}", val_pct), "%".to_string())
+    } else {
+        let fmt = if raw_val.fract() == 0.0 {
+            format!("{:.0}", raw_val)
+        } else {
+            format!("{:.2}", raw_val)
+        };
+        (fmt, u_clean.to_string())
     }
 }
