@@ -52,19 +52,25 @@ pub fn get_active_lap(lap_ranges: &[(i32, f64, f64)], cursor_x: Option<f64>, sel
 
 // Calculates the fastest lap by ignoring the first 3 laps if there are more than 3 laps in the session.
 pub fn get_fastest_lap(lap_times: &[(i32, f64)]) -> i32 {
-    let filtered: Vec<&(i32, f64)> = lap_times.iter()
+    let valid_laps: Vec<&(i32, f64)> = lap_times.iter()
+        .filter(|(lap_num, dur)| *lap_num > 0 && *dur > 0.0)
+        .collect();
+    let filtered: Vec<&(i32, f64)> = valid_laps.iter()
+        .copied()
         .filter(|(lap_num, _)| *lap_num > 3)
         .collect();
     if !filtered.is_empty() {
         filtered.iter()
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|val| val.0)
-            .unwrap_or(0)
-    } else {
-        lap_times.iter()
+            .unwrap_or(1)
+    } else if !valid_laps.is_empty() {
+        valid_laps.iter()
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|val| val.0)
-            .unwrap_or(0)
+            .unwrap_or(1)
+    } else {
+        lap_times.iter().find(|(lap_num, _)| *lap_num > 0).map(|val| val.0).unwrap_or(1)
     }
 }
 

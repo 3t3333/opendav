@@ -50,7 +50,7 @@ impl OpenDavApp {
             }
         }
         
-        let loaded = &self.sessions[self.primary_session_idx];
+        let mut trigger_update_deltas = false;
 
         // Draw checkbox bar at the top of the track map card
         ui.horizontal_wrapped(|ui| {
@@ -87,6 +87,11 @@ impl OpenDavApp {
             }
         });
 
+        if trigger_update_deltas {
+            self.update_lap_deltas();
+        }
+        
+        let loaded = &self.sessions[self.primary_session_idx];
         let is_dark = ui.style().visuals.dark_mode;
         let active_lap_num = self.selected_lap.map(|(_, lap)| lap).unwrap_or_else(|| {
             get_fastest_lap(&loaded.session.lap_times)

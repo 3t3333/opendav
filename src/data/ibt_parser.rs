@@ -31,6 +31,8 @@ pub struct IbtSession {
     
     // Highly optimized raw caching vectors for real-time 300FPS GUI lookups
     pub distance: Vec<f64>,
+    pub front_raw: Vec<f64>,
+    pub rear_raw: Vec<f64>,
     pub front_smooth: Vec<f64>,
     pub rear_smooth: Vec<f64>,
     pub rake: Vec<f64>,
@@ -349,6 +351,8 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
         lap_times,
         total_session_time,
         distance: dist_vec,
+        front_raw: front_avg,
+        rear_raw: rear_avg,
         front_smooth,
         rear_smooth,
         rake,

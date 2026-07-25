@@ -30,11 +30,15 @@ impl OpenDavApp {
             CacheSelector::Throttle => &loaded.throttle_pts_cache,
             CacheSelector::Brake => &loaded.brake_pts_cache,
             CacheSelector::Steering => &loaded.steering_pts_cache,
-            CacheSelector::FrontHeight => &loaded.front_pts_cache,
-            CacheSelector::RearHeight => &loaded.rear_pts_cache,
+            CacheSelector::FrontHeight => &loaded.front_raw_pts_cache,
+            CacheSelector::RearHeight => &loaded.rear_raw_pts_cache,
             CacheSelector::Rake => &loaded.rake_pts_cache,
             CacheSelector::LatG => &loaded.lat_g_pts_cache,
             CacheSelector::LongG => &loaded.long_g_pts_cache,
+            CacheSelector::Gear => &loaded.gear_pts_cache,
+            CacheSelector::Clutch => &loaded.clutch_pts_cache,
+            CacheSelector::DistanceDelta => &loaded.distance_delta_pts_cache,
+            CacheSelector::TimeDelta => &loaded.time_delta_pts_cache,
         }
     }
 
@@ -85,28 +89,49 @@ impl OpenDavApp {
                         .unwrap_or(0.0)
                 }
                 CacheSelector::FrontHeight => {
-                    if idx < session.front_smooth.len() {
-                        let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
-                        session.front_smooth[idx] * scale
+                    if idx < session.front_raw.len() {
+                        session.front_raw[idx]
                     } else {
                         0.0
                     }
                 }
                 CacheSelector::RearHeight => {
-                    if idx < session.rear_smooth.len() {
-                        let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
-                        session.rear_smooth[idx] * scale
+                    if idx < session.rear_raw.len() {
+                        session.rear_raw[idx]
                     } else {
                         0.0
                     }
                 }
                 CacheSelector::Rake => {
                     if idx < session.rake.len() {
-                        let scale = if session.front_smooth[idx] < 0.5 { 1000.0 } else { 1.0 };
-                        session.rake[idx] * scale
+                        session.rake[idx]
                     } else {
                         0.0
                     }
+                }
+                CacheSelector::Gear => {
+                    session.dataframe.column("Gear").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0))
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::Clutch => {
+                    session.dataframe.column("ClutchRaw").ok()
+                        .and_then(|c| c.f64().ok())
+                        .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
+                        .unwrap_or(0.0)
+                }
+                CacheSelector::DistanceDelta => {
+                    let loaded = &self.sessions[session_idx];
+                    if idx < loaded.distance_delta_pts_cache.len() {
+                        loaded.distance_delta_pts_cache[idx][1]
+                    } else { 0.0 }
+                }
+                CacheSelector::TimeDelta => {
+                    let loaded = &self.sessions[session_idx];
+                    if idx < loaded.time_delta_pts_cache.len() {
+                        loaded.time_delta_pts_cache[idx][1]
+                    } else { 0.0 }
                 }
             }
         } else {
@@ -236,7 +261,8 @@ impl OpenDavApp {
                     for lane in &lanes {
                         for trace in &lane.traces {
                             ui.separator();
-                            ui.colored_label(trace.color, format!("{}: {:.1}{}", trace.name, trace.raw_val, trace.unit));
+                            let val_fmt = if trace.name == "Gear" { format!("{:.0}", trace.raw_val) } else { format!("{:.1}", trace.raw_val) };
+                            ui.colored_label(trace.color, format!("{}: {}{}", trace.name, val_fmt, trace.unit));
                         }
                     }
                 }
@@ -252,7 +278,8 @@ impl OpenDavApp {
                             for trace in &lane.traces {
                                 ui.separator();
                                 if let Some((r_val, color)) = trace.ref_val {
-                                    ui.colored_label(color, format!("{}: {:.1}{}", trace.name, r_val, trace.unit));
+                                    let ref_val_fmt = if trace.name == "Gear" { format!("{:.0}", r_val) } else { format!("{:.1}", r_val) };
+                                    ui.colored_label(color, format!("{}: {}{}", trace.name, ref_val_fmt, trace.unit));
                                 } else {
                                     ui.colored_label(trace.color, format!("{}: N/A{}", trace.name, trace.unit));
                                 }
@@ -381,8 +408,6 @@ impl OpenDavApp {
                 reset_bounds_flag = false;
             }
 
-
-
             // Commit viewport sync metrics back to local copy state
             visible_x_range = Some((min_visible_x, max_visible_x));
 
@@ -467,38 +492,38 @@ impl OpenDavApp {
                         if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == sel_lap_num) {
                             let start_t = loaded.lap_ranges[pos].1;
                         
-                        for (s_idx, sector) in loaded.sectors.iter().enumerate() {
-                            let delta = sector_deltas.get(s_idx).copied().flatten();
-                            if let Some(d) = delta {
-                                let sector_start_t = crate::signals::processing::get_lap_time_at_distance(&lap_data.dist, &lap_data.time, sector.start_dist);
-                                let sector_end_t = crate::signals::processing::get_lap_time_at_distance(&lap_data.dist, &lap_data.time, sector.end_dist);
-                                
-                                let abs_start = start_t + sector_start_t;
-                                let abs_end = start_t + sector_end_t;
+                            for (s_idx, sector) in loaded.sectors.iter().enumerate() {
+                                let delta = sector_deltas.get(s_idx).copied().flatten();
+                                if let Some(d) = delta {
+                                    let sector_start_t = crate::signals::processing::get_lap_time_at_distance(&lap_data.dist, &lap_data.time, sector.start_dist);
+                                    let sector_end_t = crate::signals::processing::get_lap_time_at_distance(&lap_data.dist, &lap_data.time, sector.end_dist);
+                                    
+                                    let abs_start = start_t + sector_start_t;
+                                    let abs_end = start_t + sector_end_t;
 
-                                if abs_end >= min_visible_x && abs_start <= max_visible_x {
-                                    let bg_color = if d < 0.0 {
-                                        if is_dark { egui::Color32::from_rgba_unmultiplied(40, 200, 40, 40) } else { egui::Color32::from_rgba_unmultiplied(40, 200, 40, 60) }
-                                    } else {
-                                        if is_dark { egui::Color32::from_rgba_unmultiplied(255, 120, 0, 40) } else { egui::Color32::from_rgba_unmultiplied(255, 120, 0, 60) }
-                                    };
+                                    if abs_end >= min_visible_x && abs_start <= max_visible_x {
+                                        let bg_color = if d < 0.0 {
+                                            if is_dark { egui::Color32::from_rgba_unmultiplied(40, 200, 40, 40) } else { egui::Color32::from_rgba_unmultiplied(40, 200, 40, 60) }
+                                        } else {
+                                            if is_dark { egui::Color32::from_rgba_unmultiplied(255, 120, 0, 40) } else { egui::Color32::from_rgba_unmultiplied(255, 120, 0, 60) }
+                                        };
 
-                                    plot_ui.polygon(Polygon::new(
-                                        format!("ChartSectorDeltaBg_{}", sector.name),
-                                        PlotPoints::from(vec![
-                                            [abs_start, 10.0],
-                                            [abs_end, 10.0],
-                                            [abs_end, 1000.0],
-                                            [abs_start, 1000.0],
-                                        ])
-                                    ).fill_color(bg_color).width(0.0));
+                                        plot_ui.polygon(Polygon::new(
+                                            format!("ChartSectorDeltaBg_{}", sector.name),
+                                            PlotPoints::from(vec![
+                                                [abs_start, 10.0],
+                                                [abs_end, 10.0],
+                                                [abs_end, 1000.0],
+                                                [abs_start, 1000.0],
+                                            ])
+                                        ).fill_color(bg_color).width(0.0));
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
             // D. DRAW AXIS DIVIDER LANES DYNAMICALLY
             let div_color = if is_dark { egui::Color32::from_rgb(25, 30, 32) } else { egui::Color32::from_rgb(205, 204, 203) };
@@ -514,6 +539,35 @@ impl OpenDavApp {
             // E. DRAW MAIN LANES AND COMPILING TRACES
             for lane in &lanes {
                 for trace in &lane.traces {
+                    // Automatically draw smoothed variant behind raw data for Ride Heights and Rake
+                    let smooth_cache_name = match trace.name {
+                        "Front Height" | "Front RH" | "CFSRH" => Some("Ride Height (F) Smooth"),
+                        "Rear Height" | "Rear RH" => Some("Ride Height (R) Smooth"),
+                        "Dynamic Rake" => Some("Rake Angle Smooth"),
+                        _ => None,
+                    };
+                    
+                    if let Some(smooth_name) = smooth_cache_name {
+                        let smooth_pts = self.sessions[self.primary_session_idx].get_cache_slice(smooth_name);
+                        if !smooth_pts.is_empty() {
+                            let mut scaled_smooth = Vec::with_capacity(smooth_pts.len());
+                            let active_lap_num = selected_lap.map(|(_, l)| l);
+                            for &(l_num, st, et) in lap_ranges {
+                                if et >= min_visible_x && st <= max_visible_x {
+                                    if visible_width > 200.0 && active_lap_num != Some(l_num) { continue; }
+                                    let lap_slice = get_lap_points_slice(lap_ranges, smooth_pts, l_num);
+                                    for p in lap_slice {
+                                        let mut val = p[1];
+                                        if !self.settings.use_metric { val *= 0.0393701; }
+                                        scaled_smooth.push([p[0], val]);
+                                    }
+                                }
+                            }
+                            let dec_smooth = decimate_points(&scaled_smooth);
+                            plot_ui.line(Line::new(format!("{}_Smooth", trace.name), dec_smooth).color(trace.color.linear_multiply(0.45)).width(trace.width));
+                        }
+                    }
+
                     let dec_pts = decimate_points(trace.scaled_pts);
                     plot_ui.line(Line::new(trace.name, dec_pts).color(trace.color).width(trace.width));
                 }
@@ -606,7 +660,7 @@ impl OpenDavApp {
                     let center = (start_t + end_t) / 2.0;
                     let label_str = if lap_num == 0 { "Outlap".to_string() } else { format!("Lap {}", lap_num) };
                     let label_txt_color = if is_dark { egui::Color32::from_rgb(180, 195, 200) } else { egui::Color32::from_rgb(60, 70, 75) };
-                    plot_ui.text(Text::new(format!("LapLabelMarker_{}", lap_num), PlotPoint::new(center, 99.0), egui::RichText::new(label_str).color(label_txt_color).size(10.0).strong()));
+                    plot_ui.text(Text::new(format!("LapLabelMarker_{}", lap_num), PlotPoint::new(center, 98.0), egui::RichText::new(label_str).color(label_txt_color).size(10.0).strong()));
                     
                     // I2. DRAW SECTOR LABELS ON TICKER
                     if let Some(lap_data) = loaded.lap_data_cache.iter().find(|l| l.lap_num == lap_num) {
@@ -622,7 +676,6 @@ impl OpenDavApp {
                                 let sector_width_s = abs_end - abs_start;
                                 let ratio = sector_width_s / visible_width;
                                 
-                                // Alternating shaded background for sectors in timeline area (Y=0 to 9.5)
                                 let is_even = sec_idx % 2 == 0;
                                 let bg_color = if is_even { 
                                     if is_dark { egui::Color32::from_rgba_unmultiplied(200, 200, 200, 4) } else { egui::Color32::from_rgba_unmultiplied(20, 20, 20, 4) }
@@ -643,11 +696,9 @@ impl OpenDavApp {
                                 let parts: Vec<&str> = sector.name.split(" - ").collect();
                                 let short_name = parts[0];
                                 
-                                // Calculate approximate pixel width assuming 1200px plot width
                                 let est_px_width = ratio * 1200.0;
-                                let req_px_width = short_name.len() as f64 * 7.5; // Rough estimate of text width
+                                let req_px_width = short_name.len() as f64 * 7.5;
                                 
-                                // Draw text only if the sector is physically wide enough on screen
                                 if est_px_width > req_px_width {
                                     let dynamic_font_size = (ratio * 400.0).clamp(10.0, 12.0) as f32;
                                     let text_color = if is_dark { egui::Color32::from_rgb(200, 215, 220) } else { egui::Color32::from_rgb(40, 50, 55) };
@@ -669,7 +720,7 @@ impl OpenDavApp {
 
             // J. DRAW PLAYBACK CURSOR DOTS
             if let Some(cx) = cursor_x {
-                plot_ui.vline(VLine::new("Cursor Line", cx).color(ACCENT_COLOR).width(1.5));
+                plot_ui.vline(VLine::new("CursorLine", cx).color(ACCENT_COLOR).width(1.5));
                 let p_idx = self.primary_session_idx;
                 let idx = get_closest_index(&self.sessions[p_idx].front_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>(), cx);
                 
@@ -682,7 +733,6 @@ impl OpenDavApp {
                     }
                 }
 
-                // Slider Stamp
                 plot_ui.points(Points::new("Stamp Ticker", PlotPoints::from(vec![[cx, 4.75]])).color(ACCENT_COLOR).shape(egui_plot::MarkerShape::Up).radius(10.0));
             }
 
@@ -692,7 +742,7 @@ impl OpenDavApp {
                     let current_x = plot_ui.pointer_coordinate().map(|p| p.x.clamp(0.0, max_time)).unwrap_or_else(|| cursor_x.unwrap_or(0.0));
                     let start = f64::min(x_start, current_x);
                     let end = f64::max(x_start, current_x);
-                    plot_ui.span(Span::new("Zoom Highlight", start..=end).axis(Axis::X).fill(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 32)).border_width(1.0).border_color(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 120)));
+                    plot_ui.span(Span::new("ZoomHighlight", start..=end).axis(Axis::X).fill(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 32)).border_width(1.0).border_color(egui::Color32::from_rgba_unmultiplied(242, 82, 37, 120)));
                 }
             }
 

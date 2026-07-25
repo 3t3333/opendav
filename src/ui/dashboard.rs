@@ -91,199 +91,245 @@ impl OpenDavApp {
 
     pub fn draw_sidebar(&mut self, ctx: &egui::Context) {
         let is_dark = ctx.style().visuals.dark_mode;
-        
+
+        // 1. GRAPHS PAGE: ROTATED DETAILS TAB + COLLAPSIBLE LAP TIMELINE SIDEBAR
+        if self.active_page == ActivePage::Graphs {
+            let is_open = self.is_details_sidebar_open;
+
+            // A. Fixed 38px Far-Left Strip for rotated DETAILS button
+            egui::SidePanel::left("details_tab_strip")
+                .resizable(false)
+                .exact_width(38.0)
+                .frame(egui::Frame::none().fill(if is_dark { egui::Color32::from_rgb(18, 20, 24) } else { egui::Color32::from_rgb(220, 222, 225) }))
+                .show(ctx, |ui| {
+                    ui.add_space(15.0);
+                    
+                    let btn_size = egui::vec2(30.0, 110.0);
+                    let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    let is_hovered = response.hovered();
+                    
+                    let bg_color = if is_open {
+                        if is_dark { egui::Color32::from_rgb(32, 38, 46) } else { egui::Color32::from_rgb(195, 200, 208) }
+                    } else if is_hovered {
+                        if is_dark { egui::Color32::from_rgb(26, 30, 36) } else { egui::Color32::from_rgb(205, 210, 216) }
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+
+                    let stroke_color = if is_open {
+                        ACCENT_COLOR
+                    } else if is_hovered {
+                        if is_dark { egui::Color32::from_rgb(80, 90, 100) } else { egui::Color32::from_rgb(160, 170, 180) }
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+
+                    ui.painter().rect_filled(rect, 4.0, bg_color);
+                    if stroke_color != egui::Color32::TRANSPARENT {
+                        ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
+                    }
+
+                    // Rotated text mathematically centered inside rect
+                    let text_color = if is_open {
+                        ACCENT_COLOR
+                    } else if is_hovered {
+                        if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                    } else {
+                        if is_dark { egui::Color32::from_rgb(160, 170, 180) } else { egui::Color32::from_rgb(90, 100, 110) }
+                    };
+
+                    let font_id = egui::FontId::proportional(11.0);
+                    let galley = ui.painter().layout_no_wrap("DETAILS".to_string(), font_id, text_color);
+                    let text_width = galley.size().x;
+                    let text_height = galley.size().y;
+
+                    let rotated_origin = egui::pos2(rect.center().x - text_height / 2.0, rect.center().y + text_width / 2.0);
+                    let mut shape = egui::epaint::TextShape::new(rotated_origin, galley, text_color);
+                    shape.angle = -std::f32::consts::FRAC_PI_2;
+                    ui.painter().add(egui::Shape::Text(shape));
+
+                    if response.clicked() {
+                        self.is_details_sidebar_open = !self.is_details_sidebar_open;
+                    }
+                });
+
+            // B. Working Lap Timeline Select Panel (exact 5a17a77 code inside a 270px panel!)
+            if is_open {
+                egui::SidePanel::left("graphs_lap_sidebar")
+                    .resizable(false)
+                    .default_width(270.0) 
+                    .show(ctx, |ui| {
+                        ui.add_space(15.0);
+                        self.draw_graphs_sidebar_content(ui, is_dark);
+                    });
+            }
+            return;
+        }
+
+        // 2. NON-GRAPHS PAGES: RENDER STANDARD NAVIGATION SIDEBAR
         egui::SidePanel::left("sidebar_panel")
             .resizable(false)
             .default_width(260.0) 
             .show(ctx, |ui| {
                 ui.add_space(15.0);
+                self.draw_main_nav_sidebar_content(ui, is_dark);
+            });
+    }
+
+    fn draw_main_nav_sidebar_content(&mut self, ui: &mut egui::Ui, _is_dark: bool) {
+        let corner_bytes = include_bytes!("../../assets/logo_transparent_lighttext.png");
+        ui.vertical_centered(|ui| {
+            ui.add(
+                egui::Image::from_bytes("bytes://logo_transparent_lighttext.png", corner_bytes.to_vec())
+                    .show_loading_spinner(false)
+                    .max_width(150.0)
+                    .maintain_aspect_ratio(true)
+            );
+        });
+
+        ui.add_space(15.0);
+        ui.separator();
+        ui.add_space(15.0);
+
+        let sidebar_style = ui.style_mut();
+        sidebar_style.spacing.button_padding = egui::vec2(16.0, 12.0);
+
+        ui.vertical(|ui| {
+            let db_bytes = include_bytes!("../../assets/button_dashboard.png");
+            let is_db_selected = self.active_page == ActivePage::OpenDav;
+            
+            ui.add_space(5.0);
+            let img_db = egui::Image::from_bytes("bytes://button_dashboard.png", db_bytes.to_vec())
+                .max_width(240.0)
+                .rounding(8.0)
+                .sense(egui::Sense::click());
+            let resp = ui.add(img_db);
+            
+            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_db_selected);
+            let color = egui::Rgba::from_rgba_premultiplied(
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
+                hover_f * (1.0 - sel_f) + sel_f
+            );
+            if color.a() > 0.01 {
+                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+            }
+            if resp.clicked() {
+                self.active_page = ActivePage::OpenDav;
+            }
+
+            ui.add_space(15.0);
+
+            let gr_bytes = include_bytes!("../../assets/button_graphs.png");
+            let is_gr_selected = self.active_page == ActivePage::Graphs;
+            
+            let img_gr = egui::Image::from_bytes("bytes://button_graphs.png", gr_bytes.to_vec())
+                .max_width(240.0)
+                .rounding(8.0)
+                .sense(egui::Sense::click());
+            let resp = ui.add(img_gr);
+            
+            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_gr_selected);
+            let color = egui::Rgba::from_rgba_premultiplied(
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
+                hover_f * (1.0 - sel_f) + sel_f
+            );
+            if color.a() > 0.01 {
+                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+            }
+            if resp.clicked() {
+                self.active_page = ActivePage::Graphs;
+                if !self.sessions.is_empty() && self.selected_lap.is_none() {
+                    let p_idx = self.primary_session_idx;
+                    let session = &self.sessions[p_idx].session;
+                    let fastest_lap = get_fastest_lap(&session.lap_times);
+                    self.selected_lap = if fastest_lap > 0 { Some((p_idx, fastest_lap)) } else { None };
+                }
+            }
+
+            ui.add_space(15.0);
+
+            let rep_bytes = include_bytes!("../../assets/button_reports.png");
+            let is_rep_selected = self.active_page == ActivePage::Reports;
+
+            let img_rep = egui::Image::from_bytes("bytes://button_reports.png", rep_bytes.to_vec())
+                .max_width(240.0)
+                .rounding(8.0)
+                .sense(egui::Sense::click());
+            let resp = ui.add(img_rep);
+
+            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_rep_selected);
+            let color = egui::Rgba::from_rgba_premultiplied(
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
+                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
+                hover_f * (1.0 - sel_f) + sel_f
+            );
+            if color.a() > 0.01 {
+                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+            }
+            if resp.clicked() {
+                self.active_page = ActivePage::Reports;
+            }
+
+            ui.add_space(15.0);
+        });
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let is_settings = self.active_page == ActivePage::Settings;
                 
-                match self.active_page {
-                    ActivePage::OpenDav | ActivePage::Reports | ActivePage::SimGit | ActivePage::Settings => {
-                        // 1. CUSTOM CORNER LOGO HEADER
-                        let corner_bytes = include_bytes!("../../assets/logo_transparent_lighttext.png");
-                        ui.vertical_centered(|ui| {
-                            ui.add(
-                                egui::Image::from_bytes("bytes://logo_transparent_lighttext.png", corner_bytes.to_vec())
-                                    .show_loading_spinner(false)
-                                    .max_width(150.0) // Scaled down to fit better as a corner logo
-                                    .maintain_aspect_ratio(true)
-                            );
-                        });
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
+                let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_settings);
+                let acc = egui::Rgba::from(ACCENT_COLOR);
+                let base = egui::Rgba::from(egui::Color32::DARK_GRAY);
+                let gear_color: egui::Color32 = egui::Rgba::from_rgba_premultiplied(
+                    base.r() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.r() * sel_f,
+                    base.g() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.g() * sel_f,
+                    base.b() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.b() * sel_f,
+                    base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f
+                ).into();
+                
+                ui.painter().text(
+                    rect.center(), 
+                    egui::Align2::CENTER_CENTER, 
+                    "⚙", 
+                    egui::FontId::proportional(22.0), 
+                    gear_color
+                );
+                
+                if resp.on_hover_text("Settings").clicked() {
+                    self.active_page = ActivePage::Settings;
+                }
+                
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new("v0.9.0-rs").color(egui::Color32::DARK_GRAY).small());
+                });
+            });
+        });
+    }
 
-                        ui.add_space(15.0);
-                        ui.separator();
-                        ui.add_space(15.0);
+    fn draw_graphs_sidebar_content(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        ui.vertical(|ui| {
+            ui.add_space(5.0);
+            if ui.button(egui::RichText::new("⬅  Back to OpenDAV").strong().color(ACCENT_COLOR)).clicked() {
+                self.active_page = ActivePage::OpenDav;
+            }
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
 
-                        let sidebar_style = ui.style_mut();
-                        sidebar_style.spacing.button_padding = egui::vec2(16.0, 12.0); // 35% larger padding
-
-                        ui.vertical(|ui| {
-                            // 1. Dashboard Image Button (Full width, padded with selection glow border)
-                            let db_bytes = include_bytes!("../../assets/button_dashboard.png");
-                            let is_db_selected = self.active_page == ActivePage::OpenDav;
-                            
-                            ui.add_space(5.0);
-                            let img_db = egui::Image::from_bytes("bytes://button_dashboard.png", db_bytes.to_vec())
-                                .max_width(240.0)
-                                .rounding(8.0)
-                                .sense(egui::Sense::click());
-                            let resp = ui.add(img_db);
-                            
-                            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
-                            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_db_selected);
-                            let color = egui::Rgba::from_rgba_premultiplied(
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
-                                hover_f * (1.0 - sel_f) + sel_f
-                            );
-                            if color.a() > 0.01 {
-                                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
-                            }
-                            if resp.clicked() {
-                                self.active_page = ActivePage::OpenDav;
-                            }
-
-                            ui.add_space(15.0);
-
-                            // 2. Graphs Workspace Image Button
-                            let gr_bytes = include_bytes!("../../assets/button_graphs.png");
-                            let is_gr_selected = self.active_page == ActivePage::Graphs;
-                            
-                            let img_gr = egui::Image::from_bytes("bytes://button_graphs.png", gr_bytes.to_vec())
-                                .max_width(240.0)
-                                .rounding(8.0)
-                                .sense(egui::Sense::click());
-                            let resp = ui.add(img_gr);
-                            
-                            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
-                            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_gr_selected);
-                            let color = egui::Rgba::from_rgba_premultiplied(
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
-                                hover_f * (1.0 - sel_f) + sel_f
-                            );
-                            if color.a() > 0.01 {
-                                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
-                            }
-                            if resp.clicked() {
-                                self.active_page = ActivePage::Graphs;
-                                // Default to fastest lap on first entering graphs page
-                                if !self.sessions.is_empty() && self.selected_lap.is_none() {
-                                    let p_idx = self.primary_session_idx;
-                                    let session = &self.sessions[p_idx].session;
-                                    let fastest_lap = get_fastest_lap(&session.lap_times);
-                                    self.selected_lap = if fastest_lap > 0 { Some((p_idx, fastest_lap)) } else { None };
-                                }
-                            }
-
-                            ui.add_space(15.0);
-
-                            // 3. Reports Image Button
-                            let rep_bytes = include_bytes!("../../assets/button_reports.png");
-                            let is_rep_selected = self.active_page == ActivePage::Reports;
-
-                            let img_rep = egui::Image::from_bytes("bytes://button_reports.png", rep_bytes.to_vec())
-                                .max_width(240.0)
-                                .rounding(8.0)
-                                .sense(egui::Sense::click());
-                            let resp = ui.add(img_rep);
-
-                            let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
-                            let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_rep_selected);
-                            let color = egui::Rgba::from_rgba_premultiplied(
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
-                                1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
-                                hover_f * (1.0 - sel_f) + sel_f
-                            );
-                            if color.a() > 0.01 {
-                                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
-                            }
-                            if resp.clicked() {
-                                self.active_page = ActivePage::Reports;
-                            }
-
-                            ui.add_space(15.0);
-
-                            // 4. SimGit Image Button (HIDDEN FOR PRE-RELEASE)
-                            // let simgit_bytes = include_bytes!("../../assets/button_simgit.png");
-                            // let is_simgit_selected = self.active_page == ActivePage::SimGit;
-                            // let border_color_simgit = if is_simgit_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
-                            // 
-                            // egui::Frame::none()
-                            //     .stroke(egui::Stroke::new(2.0, border_color_simgit))
-                            //     .rounding(8.0)
-                            //     .inner_margin(1.0)
-                            //     .show(ui, |ui| {
-                            //         let img_simgit = egui::Image::from_bytes("bytes://button_simgit.png", simgit_bytes.to_vec())
-                            //             .max_width(240.0)
-                            //             .rounding(8.0)
-                            //             .sense(egui::Sense::click());
-                            //         let resp = ui.add(img_simgit);
-                            //         if resp.clicked() {
-                            //             self.active_page = ActivePage::SimGit;
-                            //         }
-                            //     });
-
-                            ui.add_space(15.0);
-                        });
-
-
-                    }
-                    ActivePage::Graphs => {
-                        // 2. COMPACT MOTEC SIDEBAR CUT-OFF (LAP SELECTION EXCLUSIVE)
-                        ui.vertical(|ui| {
-                            ui.add_space(5.0);
-                            if ui.button(egui::RichText::new("⬅  Back to OpenDAV").strong().color(ACCENT_COLOR)).clicked() {
-                                self.active_page = ActivePage::OpenDav;
-                            }
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.add_space(10.0);
-
-                            // --- PLAYBACK CONTROLS ---
-                            let select_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
-                            ui.label(egui::RichText::new("TELEMETRY PLAYBACK").color(select_hdr_color).size(10.0).strong());
-                            ui.add_space(8.0);
-
-                            ui.horizontal(|ui| {
-                                let play_icon = if self.is_playing { "⏸ Pause " } else { "▶ Play  " };
-                                let play_color = if self.is_playing { egui::Color32::from_rgb(200, 50, 50) } else { ACCENT_COLOR };
-                                
-                                let play_btn = ui.add_sized([100.0, 32.0], egui::Button::new(egui::RichText::new(play_icon).strong().color(play_color).size(16.0)));
-                                if play_btn.clicked() {
-                                    if !self.is_playing && !self.sessions.is_empty() && self.selected_lap.is_some() {
-                                        self.is_playing = true;
-                                    } else {
-                                        self.is_playing = false;
-                                    }
-                                }
-
-                                ui.add_space(5.0);
-                                
-                                let mut speed_text = "1.0x";
-                                if self.playback_speed == 0.5 { speed_text = "0.5x"; }
-                                else if self.playback_speed == 2.0 { speed_text = "2.0x"; }
-                                
-                                egui::ComboBox::from_id_source("playback_speed")
-                                    .selected_text(egui::RichText::new(speed_text).size(14.0))
-                                    .width(60.0)
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut self.playback_speed, 0.5, "0.5x");
-                                        ui.selectable_value(&mut self.playback_speed, 1.0, "1.0x");
-                                        ui.selectable_value(&mut self.playback_speed, 2.0, "2.0x");
-                                    });
-                            });
-
-                            ui.add_space(15.0);
-                            ui.separator();
-                            ui.add_space(10.0);
-
-                            ui.label(egui::RichText::new("LAP TIMELINE SELECT").color(select_hdr_color).size(10.0).strong());
-                            ui.add_space(8.0);
+            let select_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
+            ui.label(egui::RichText::new("LAP TIMELINE SELECT").color(select_hdr_color).size(10.0).strong());
+            ui.add_space(8.0);
 
                             if self.sessions.is_empty() {
                                 ui.label(egui::RichText::new("No Session Active").color(egui::Color32::GRAY).small());
@@ -501,8 +547,6 @@ impl OpenDavApp {
                                 }
                             }
                         });
-                    }
-                }
 
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(10.0);
@@ -539,7 +583,6 @@ impl OpenDavApp {
                         });
                     });
                 });
-            });
     }
 
     pub fn draw_top_panel(&mut self, ctx: &egui::Context) {
@@ -627,6 +670,35 @@ impl OpenDavApp {
                             self.update_sector_deltas();
                         }
                     }
+
+                    // --- TELEMETRY PLAYBACK CONTROLS (TOP PANEL NEXT TO FILE DETAILS) ---
+                    ui.separator();
+                    let play_icon = if self.is_playing { "⏸ Pause" } else { "▶ Play" };
+                    let play_color = if self.is_playing { egui::Color32::from_rgb(220, 70, 70) } else { ACCENT_COLOR };
+                    
+                    let play_btn = ui.add(
+                        egui::Button::new(egui::RichText::new(play_icon).strong().color(play_color).size(12.0))
+                    );
+                    if play_btn.clicked() {
+                        if !self.is_playing && !self.sessions.is_empty() && self.selected_lap.is_some() {
+                            self.is_playing = true;
+                        } else {
+                            self.is_playing = false;
+                        }
+                    }
+
+                    let mut speed_text = "1.0x";
+                    if self.playback_speed == 0.5 { speed_text = "0.5x"; }
+                    else if self.playback_speed == 2.0 { speed_text = "2.0x"; }
+                    
+                    egui::ComboBox::from_id_source("top_playback_speed")
+                        .selected_text(egui::RichText::new(speed_text).size(12.0))
+                        .width(48.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.playback_speed, 0.5, "0.5x");
+                            ui.selectable_value(&mut self.playback_speed, 1.0, "1.0x");
+                            ui.selectable_value(&mut self.playback_speed, 2.0, "2.0x");
+                        });
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

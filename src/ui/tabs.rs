@@ -243,10 +243,14 @@ impl OpenDavApp {
         ui.add_space(15.0);
         ui.vertical_centered(|ui| {
             if ui.button(egui::RichText::new("📈 OPEN GRAPHS WORKSPACE").strong().size(12.0).color(if is_dark { egui::Color32::from_rgb(10, 10, 10) } else { egui::Color32::WHITE })).clicked() {
-                // Rebuild track sectors and sector bests cache using Signals Layer
                 self.active_page = ActivePage::Graphs;
-                if self.selected_lap.is_none() {
-                    self.selected_lap = Some((self.primary_session_idx, fastest_lap));
+                let p_idx = self.primary_session_idx;
+                if p_idx < self.sessions.len() {
+                    let fastest = get_fastest_lap(&self.sessions[p_idx].session.lap_times);
+                    self.selected_lap = if fastest > 0 { Some((p_idx, fastest)) } else { None };
+                    self.visible_x_range = None;
+                    self.reset_bounds_flag = true;
+                    self.reset_bounds_next_frame = 3;
                 }
             }
         });
@@ -259,14 +263,26 @@ impl OpenDavApp {
             return;
         }
 
+        if self.selected_lap.is_none() {
+            let p_idx = self.primary_session_idx;
+            if p_idx < self.sessions.len() {
+                let fastest = get_fastest_lap(&self.sessions[p_idx].session.lap_times);
+                if fastest > 0 {
+                    self.selected_lap = Some((p_idx, fastest));
+                    self.visible_x_range = None;
+                    self.reset_bounds_flag = true;
+                    self.reset_bounds_next_frame = 3;
+                }
+            }
+        }
+
         // 1. HORIZONTAL MOTEC WORKSHEET TABS AT THE TOP!
         ui.horizontal(|ui| {
             let tab_style = ui.style_mut();
             tab_style.spacing.button_padding = egui::vec2(12.0, 8.0); // Perfect, professional tab sizing
 
-            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Basic, "1. Basic (Inputs)");
-            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::BasicVehicle, "2. Basic Vehicle");
-            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::DynamicRake, "3. Dynamic Rake");
+            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Driver, "1. Driver");
+            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Vehicle, "2. Vehicle");
         });
 
         ui.add_space(10.0);
@@ -290,9 +306,8 @@ impl OpenDavApp {
 
         // 2. ACTIVE WORKSHEET PLOTTING AREA (SINGLE INTEGRATED HIGH-PERFORMANCE PLOT ENVIRONMENT!)
         let config = match self.active_worksheet {
-            WorksheetTab::Basic => Some(WorksheetConfig::basic()),
-            WorksheetTab::BasicVehicle => Some(WorksheetConfig::basic_vehicle()),
-            WorksheetTab::DynamicRake => Some(WorksheetConfig::rake()),
+            WorksheetTab::Driver => Some(WorksheetConfig::driver()),
+            WorksheetTab::Vehicle => Some(WorksheetConfig::vehicle()),
             _ => None,
         };
 
@@ -310,9 +325,9 @@ impl OpenDavApp {
         ui.allocate_ui(egui::vec2(ui.available_width(), graphs_height), |ui| {
             if let Some(cfg) = &config {
                 let canvas_id = match self.active_worksheet {
-                    WorksheetTab::Basic => "basic_worksheet_canvas",
-                    WorksheetTab::BasicVehicle => "basic_vehicle_worksheet_canvas",
-                    _ => "rake_worksheet_canvas",
+                    WorksheetTab::Driver => "basic_worksheet_canvas",
+                    WorksheetTab::Vehicle => "basic_vehicle_worksheet_canvas",
+                    _ => "custom_worksheet_canvas",
                 };
                 self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);
             } else {

@@ -6,9 +6,8 @@ pub const SPEED_COLOR: egui::Color32 = egui::Color32::from_rgb(78, 159, 245);   
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum WorksheetTab {
-    Basic,             // 1. Basic (Driver Inputs: Speed, Throttle, Brake, Steering, RPM, Gear)
-    BasicVehicle,      // 2. Basic Vehicle (Ground Speed, Ride Heights, Rake, Lat G, Long G)
-    DynamicRake,       // 3. Dynamic Rake Analyzer
+    Driver,            // 1. Basic (Driver Inputs: Speed, Throttle, Brake, Steering, RPM, Gear)
+    Vehicle,           // 2. Basic Vehicle (Ground Speed, Ride Heights, Rake, Lat G, Long G)
     TireEnergy,        // 3. Tire Energy Profiler
     TireFuelWindows,   // 4. Tire & Fuel Windows
     TireTempLoad,      // 5. Tire Temp/Load Map
@@ -33,9 +32,19 @@ pub enum CacheSelector {
     Rake, 
     LatG,
     LongG,
+    Gear,
+    Clutch,
+    DistanceDelta,
+    TimeDelta,
 }
 
 
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LaneScaling {
+    Mono,
+    Poly,
+}
 
 pub struct TraceSpec {
     pub name: &'static str,
@@ -49,6 +58,7 @@ pub struct LaneSpec {
     pub title: &'static str,
     pub y_min: f64,
     pub y_max: f64,
+    pub scaling: LaneScaling,
     pub traces: Vec<TraceSpec>,
 }
 
@@ -57,14 +67,15 @@ pub struct WorksheetConfig {
 }
 
 impl WorksheetConfig {
-    pub fn basic() -> Self {
+    pub fn driver() -> Self {
         Self {
             lanes: vec![
                 LaneSpec {
                     title: "Ground Speed",
                     y_min: 76.0,
                     y_max: 98.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
                     ],
                 },
@@ -72,24 +83,29 @@ impl WorksheetConfig {
                     title: "Engine RPM",
                     y_min: 52.0,
                     y_max: 72.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "RPM", cache: CacheSelector::RPM, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, unit: "" },
+                        TraceSpec { name: "Gear", cache: CacheSelector::Gear, color: egui::Color32::from_rgb(255, 105, 180), width: 1.8, unit: "" },
                     ],
                 },
                 LaneSpec {
                     title: "Pedal Inputs",
                     y_min: 28.0,
                     y_max: 48.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "Throttle", cache: CacheSelector::Throttle, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, unit: "%" },
                         TraceSpec { name: "Brake", cache: CacheSelector::Brake, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, unit: "%" },
+                        TraceSpec { name: "ClutchRaw", cache: CacheSelector::Clutch, color: egui::Color32::from_rgb(52, 152, 219), width: 2.2, unit: "%" },
                     ],
                 },
                 LaneSpec {
                     title: "Steering",
                     y_min: 10.0,
                     y_max: 24.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "Steering Angle", cache: CacheSelector::Steering, color: SUB_ACCENT_COLOR, width: 2.2, unit: "°" },
                     ],
                 },
@@ -97,14 +113,15 @@ impl WorksheetConfig {
         }
     }
 
-    pub fn basic_vehicle() -> Self {
+    pub fn vehicle() -> Self {
         Self {
             lanes: vec![
                 LaneSpec {
                     title: "Ground Speed",
                     y_min: 76.0,
                     y_max: 98.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
                     ],
                 },
@@ -112,7 +129,8 @@ impl WorksheetConfig {
                     title: "Ride Heights & Rake",
                     y_min: 45.0,
                     y_max: 75.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "Front Height", cache: CacheSelector::FrontHeight, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, unit: " mm" },
                         TraceSpec { name: "Rear Height", cache: CacheSelector::RearHeight, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, unit: " mm" },
                         TraceSpec { name: "Dynamic Rake", cache: CacheSelector::Rake, color: SUB_ACCENT_COLOR, width: 2.2, unit: " mm" },
@@ -122,41 +140,10 @@ impl WorksheetConfig {
                     title: "Accelerations",
                     y_min: 10.0,
                     y_max: 40.0,
-                    traces: vec![
+                    scaling: LaneScaling::Mono,
+            traces: vec![
                         TraceSpec { name: "Lateral G", cache: CacheSelector::LatG, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, unit: " G" },
                         TraceSpec { name: "Longitudinal G", cache: CacheSelector::LongG, color: egui::Color32::from_rgb(52, 152, 219), width: 2.2, unit: " G" },
-                    ],
-                },
-            ],
-        }
-    }
-
-    pub fn rake() -> Self {
-        Self {
-            lanes: vec![
-                LaneSpec {
-                    title: "Ground Speed",
-                    y_min: 70.0,
-                    y_max: 98.0,
-                    traces: vec![
-                        TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
-                    ],
-                },
-                LaneSpec {
-                    title: "Axle Heights",
-                    y_min: 40.0,
-                    y_max: 66.0,
-                    traces: vec![
-                        TraceSpec { name: "Front RH", cache: CacheSelector::FrontHeight, color: SUB_ACCENT_COLOR, width: 2.2, unit: "mm" },
-                        TraceSpec { name: "Rear RH", cache: CacheSelector::RearHeight, color: egui::Color32::from_rgb(255, 20, 147), width: 2.2, unit: "mm" },
-                    ],
-                },
-                LaneSpec {
-                    title: "Chassis Attitude",
-                    y_min: 12.0,
-                    y_max: 36.0,
-                    traces: vec![
-                        TraceSpec { name: "Dynamic Rake", cache: CacheSelector::Rake, color: ACCENT_COLOR, width: 2.2, unit: "mm" },
                     ],
                 },
             ],
