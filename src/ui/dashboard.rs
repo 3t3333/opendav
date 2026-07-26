@@ -958,10 +958,13 @@ impl OpenDavApp {
 
                 let row_idx = if let Ok(col) = df.column("SessionTime") {
                     if let Ok(ca) = col.f64() {
-                        let cx = self.cursor_x.unwrap_or(0.0);
+                        let session_start = ca.get(0).unwrap_or(0.0);
+                        let cx = self.cursor_x.unwrap_or(0.0) + session_start;
+                        
                         match ca.cont_slice() {
                             Ok(slice) => crate::signals::processing::get_closest_index(slice, cx),
                             Err(_) => {
+                                // Fallback for chunked Polars arrays
                                 let vec: Vec<f64> = ca.into_no_null_iter().collect();
                                 crate::signals::processing::get_closest_index(&vec, cx)
                             }
@@ -1431,5 +1434,27 @@ fn format_channel_unit_val(
             format!("{:.2}", raw_val)
         };
         (fmt, u_clean.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use polars::prelude::*;
+
+    #[test]
+    fn test_cursor_session_time_alignment() {
+        let s1 = Series::new("SessionTime", &[52345.0, 52346.0, 52347.0]);
+        let df = DataFrame::new(vec![s1]).unwrap();
+        let ca = df.column("SessionTime").unwrap().f64().unwrap();
+        let session_start = ca.get(0).unwrap_or(0.0);
+        assert_eq!(session_start, 52345.0);
+        
+        let cursor_x = 1.0; // 1 second into the session (normalized)
+        let cx = cursor_x + session_start;
+        
+        let slice = ca.cont_slice().unwrap();
+        let row_idx = crate::signals::processing::get_closest_index(slice, cx);
+        assert_eq!(row_idx, 1);
     }
 }
