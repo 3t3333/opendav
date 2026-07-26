@@ -1,18 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-pub mod data;
-pub mod signals;
 pub mod config;
+pub mod data;
 pub mod rendering;
-pub mod ui;
+pub mod signals;
 pub mod simgit;
+pub mod ui;
 
 #[cfg(feature = "dev_tools")]
 pub mod dev_tools;
 
-use crate::config::worksheet::{WorksheetTab, WorksheetConfig, ACCENT_COLOR, DARK_BG_COLOR, LIGHT_BG_COLOR};
+use crate::config::worksheet::WorksheetTab;
 use crate::signals::processing::{
-    LapData, TrackSector, detect_track_sectors, get_lap_time_at_distance, get_fastest_lap
+    detect_track_sectors, get_lap_time_at_distance, LapData, TrackSector,
 };
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -144,6 +144,8 @@ pub struct OpenDavApp {
     pub show_sector_deltas: bool,
     pub show_chart_deltas: bool,
     pub sector_deltas: Vec<Option<f64>>,
+    pub comparison_cyan: Option<crate::signals::comparison::ComparisonCache>,
+    pub comparison_secondary: Option<crate::signals::comparison::ComparisonCache>,
     
     pub show_all_splits: bool,
     
@@ -217,6 +219,8 @@ impl Default for OpenDavApp {
             show_sector_deltas: false,
             show_chart_deltas: false,
             sector_deltas: Vec::new(),
+            comparison_cyan: None,
+            comparison_secondary: None,
             show_all_splits: true,
             auto_follow_track_map: false,
             auto_rotate_track_map: false,
@@ -232,7 +236,9 @@ impl Default for OpenDavApp {
             channel_search_query: String::new(),
             is_playing: false,
             playback_speed: 1.0,
-            simgit_manager: crate::simgit::manager::SimGitManager::new(std::path::PathBuf::from("workspace")),
+            simgit_manager: crate::simgit::manager::SimGitManager::new(std::path::PathBuf::from(
+                "workspace",
+            )),
             simgit_prev_setup: None,
             simgit_new_setup: None,
             simgit_diff: None,
@@ -256,42 +262,42 @@ impl OpenDavApp {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "DIN1451".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/fonts/din-1451/DINMittelschriftStd.otf"))),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/din-1451/DINMittelschriftStd.otf"
+            ))),
         );
-        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "DIN1451".to_owned());
-        fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "DIN1451".to_owned());
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .insert(0, "DIN1451".to_owned());
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Monospace)
+            .unwrap()
+            .insert(0, "DIN1451".to_owned());
         _cc.egui_ctx.set_fonts(fonts);
 
+        let app = Self {
+            settings: crate::config::settings::AppSettings::load(),
+            ..Self::default()
+        };
+        
         let mut style = egui::Style::default();
-        style.visuals = egui::Visuals::dark(); 
-        
-        // Brand color customizations matching requested #0A0A0A Obsidian theme
-        style.visuals.selection.bg_fill = ACCENT_COLOR;
-        style.visuals.window_fill = DARK_BG_COLOR;
-        style.visuals.panel_fill = DARK_BG_COLOR;
-        
-        // Custom widget rounding and borders
-        style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(25, 35, 38);
-        style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(12, 20, 22);
-        style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(8, 14, 16);
-        style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 6));
-
-        _cc.egui_ctx.set_style(style);
-
-        let mut app = Self::default();
-        app.settings = crate::config::settings::AppSettings::load();
-        
-        // Ensure egui matches our loaded dark mode preference
-        if !app.settings.dark_mode {
-            _cc.egui_ctx.set_visuals(egui::Visuals::light());
-        }
+        crate::config::theme::AppTheme::for_mode(app.settings.dark_mode).apply(&mut style);
+        _cc.egui_ctx.set_global_style(style);
         
         app
     }
 }
 
 impl LoadedSession {
-    pub fn new(file_name: String, mut session: crate::data::ibt_parser::IbtSession, corner_merge_threshold: f64, mapbox_api_key: &str) -> Result<Self, String> {
+    pub fn new(
+        file_name: String,
+        mut session: crate::data::ibt_parser::IbtSession,
+        corner_merge_threshold: f64,
+        mapbox_api_key: &str,
+    ) -> Result<Self, String> {
         let n = session.distance.len();
             
             // Build base points
@@ -311,29 +317,96 @@ impl LoadedSession {
             let mut longg = Vec::with_capacity(n);
             let mut cache_to_df_index = Vec::with_capacity(n);
 
-            let time_col_opt = session.dataframe.column("SessionTime").ok().and_then(|c| c.f64().ok());
-            if time_col_opt.is_none() { return Err("SessionTime missing".into()); }
+        let time_col_opt = session
+            .dataframe
+            .column("SessionTime")
+            .ok()
+            .and_then(|c| c.f64().ok());
+        if time_col_opt.is_none() {
+            return Err("SessionTime missing".into());
+        }
             let time_col = time_col_opt.unwrap();
             let session_start = time_col.get(0).unwrap_or(0.0);
 
             // Fetch columns safely with fallback defaults to prevent schema panics!
-            let speed_col = session.dataframe.column("Speed").ok().map(|c| c.f64().ok()).flatten();
-            let throttle_col = session.dataframe.column("Throttle").ok().map(|c| c.f64().ok()).flatten();
-            let brake_col = session.dataframe.column("Brake").ok().map(|c| c.f64().ok()).flatten();
-            let steering_col = session.dataframe.column("SteeringWheelAngle").ok().map(|c| c.f64().ok()).flatten();
-            let rpm_col = session.dataframe.column("RPM").ok().map(|c| c.f64().ok()).flatten();
-            let gear_col = session.dataframe.column("Gear").ok().map(|c| c.f64().ok()).flatten();
-            let clutch_col = session.dataframe.column("ClutchRaw").ok().map(|c| c.f64().ok()).flatten();
-            let latg_col = session.dataframe.column("LatAccel").ok().map(|c| c.f64().ok()).flatten();
-            let longg_col = session.dataframe.column("LongAccel").ok().map(|c| c.f64().ok()).flatten();
+        let speed_col = session
+            .dataframe
+            .column("Speed")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let throttle_col = session
+            .dataframe
+            .column("Throttle")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let brake_col = session
+            .dataframe
+            .column("Brake")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let steering_col = session
+            .dataframe
+            .column("SteeringWheelAngle")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let rpm_col = session
+            .dataframe
+            .column("RPM")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let gear_col = session
+            .dataframe
+            .column("Gear")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let clutch_col = session
+            .dataframe
+            .column("ClutchRaw")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let latg_col = session
+            .dataframe
+            .column("LatAccel")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let longg_col = session
+            .dataframe
+            .column("LongAccel")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
 
-            let is_on_track_col = session.dataframe.column("IsOnTrack").ok().map(|c| c.f64().ok()).flatten();
-            let in_pit_stall_col = session.dataframe.column("PlayerCarInPitStall").ok().map(|c| c.f64().ok()).flatten();
+        let is_on_track_col = session
+            .dataframe
+            .column("IsOnTrack")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
+        let in_pit_stall_col = session
+            .dataframe
+            .column("PlayerCarInPitStall")
+            .ok()
+            .map(|c| c.f64().ok())
+            .flatten();
 
             // 1. Compile entire session relative seconds [0.0 to stint duration]
             for i in 0..n {
-                let is_on_track = is_on_track_col.as_ref().map(|c| c.get(i).unwrap_or(1.0)).unwrap_or(1.0);
-                let in_pit_stall = in_pit_stall_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
+            let is_on_track = is_on_track_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(1.0))
+                .unwrap_or(1.0);
+            let in_pit_stall = in_pit_stall_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0);
 
                 if is_on_track < 1.0 || in_pit_stall > 0.0 {
                     continue; // Skip off-track or pit stall samples cleanly!
@@ -350,30 +423,64 @@ impl LoadedSession {
                 rear.push([rel_time, session.rear_smooth[i]]);
                 rake.push([rel_time, session.rake[i]]);
                 
-                let raw_speed = speed_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 3.6; // convert m/s to km/h
+            let raw_speed = speed_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                * 3.6; // convert m/s to km/h
                 speed.push([rel_time, raw_speed]);
 
-                let raw_thr = throttle_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0; // convert 0..1 to 0..100%
+            let raw_thr = throttle_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                * 100.0; // convert 0..1 to 0..100%
                 throttle.push([rel_time, raw_thr]);
 
-                let raw_brk = brake_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0; // convert 0..1 to 0..100%
+            let raw_brk = brake_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                * 100.0; // convert 0..1 to 0..100%
                 brake.push([rel_time, raw_brk]);
 
-                let raw_steer = steering_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 57.2958; // convert rad to deg
+            let raw_steer = steering_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                * 57.2958; // convert rad to deg
                 steering.push([rel_time, raw_steer]);
 
-                let raw_rpm = rpm_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
+            let raw_rpm = rpm_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0);
                 rpm.push([rel_time, raw_rpm]);
 
-                let raw_gear = gear_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0);
+            let raw_gear = gear_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0);
                 gear.push([rel_time, raw_gear]);
-                let raw_clutch = clutch_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) * 100.0;
+            let raw_clutch = clutch_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                * 100.0;
                 clutch.push([rel_time, raw_clutch]);
                 
-                let raw_latg = latg_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) / 9.80665; // convert m/s2 to G
+            let raw_latg = latg_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                / 9.80665; // convert m/s2 to G
                 latg.push([rel_time, raw_latg]);
                 
-                let raw_longg = longg_col.as_ref().map(|c| c.get(i).unwrap_or(0.0)).unwrap_or(0.0) / 9.80665; // convert m/s2 to G
+            let raw_longg = longg_col
+                .as_ref()
+                .map(|c| c.get(i).unwrap_or(0.0))
+                .unwrap_or(0.0)
+                / 9.80665; // convert m/s2 to G
                 longg.push([rel_time, raw_longg]);
             }
 
@@ -388,8 +495,11 @@ impl LoadedSession {
             let max_spd = speed.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
             let pad_spd = (max_spd - min_spd) * 0.1;
             let scale_speed = |val: f64| -> f64 {
-                if max_spd == min_spd { return 87.0; }
-                let pct = ((val - (min_spd - pad_spd)) / ((max_spd + pad_spd) - (min_spd - pad_spd))).clamp(0.0, 1.0);
+            if max_spd == min_spd {
+                return 87.0;
+            }
+            let pct = ((val - (min_spd - pad_spd)) / ((max_spd + pad_spd) - (min_spd - pad_spd)))
+                .clamp(0.0, 1.0);
                 76.0 + pct * (98.0 - 76.0)
             };
 
@@ -404,23 +514,27 @@ impl LoadedSession {
                 28.0 + (val / 100.0) * 20.0 // Map 0..100 to 28..48
             };
             let scale_rpm = |val: f64| -> f64 {
-                if max_r == min_r { return 62.0; }
-                let pct = ((val - (min_r - pad_r)) / ((max_r + pad_r) - (min_r - pad_r))).clamp(0.0, 1.0);
+            if max_r == min_r {
+                return 62.0;
+            }
+            let pct =
+                ((val - (min_r - pad_r)) / ((max_r + pad_r) - (min_r - pad_r))).clamp(0.0, 1.0);
                 52.0 + pct * (72.0 - 52.0)
             };
 
             // Lane 3: Throttle and Brake percentage Scaling (Directly fits [28.0, 48.0])
-            let scale_pct = |val: f64| -> f64 {
-                28.0 + (val / 100.0).clamp(0.0, 1.0) * (48.0 - 28.0)
-            };
+        let scale_pct = |val: f64| -> f64 { 28.0 + (val / 100.0).clamp(0.0, 1.0) * (48.0 - 28.0) };
 
             // Lane 4: Steering Angle Scaling
             let min_st = steering.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
             let max_st = steering.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
             let pad_st = (max_st - min_st) * 0.1;
             let scale_steering = |val: f64| -> f64 {
-                if max_st == min_st { return 17.0; }
-                let pct = ((val - (min_st - pad_st)) / ((max_st + pad_st) - (min_st - pad_st))).clamp(0.0, 1.0);
+            if max_st == min_st {
+                return 17.0;
+            }
+            let pct = ((val - (min_st - pad_st)) / ((max_st + pad_st) - (min_st - pad_st)))
+                .clamp(0.0, 1.0);
                 10.0 + pct * (24.0 - 10.0)
             };
 
@@ -436,7 +550,9 @@ impl LoadedSession {
 
             let scale_front = |val: f64| -> f64 {
                 let range = (max_front + pad_front) - (min_front - pad_front);
-                if range <= 1e-6 { return 60.0; }
+            if range <= 1e-6 {
+                return 60.0;
+            }
                 let pct = ((val - (min_front - pad_front)) / range).clamp(0.0, 1.0);
                 45.5 + pct * 29.0
             };
@@ -452,7 +568,9 @@ impl LoadedSession {
 
             let scale_rear = |val: f64| -> f64 {
                 let range = (max_rear + pad_rear) - (min_rear - pad_rear);
-                if range <= 1e-6 { return 60.0; }
+            if range <= 1e-6 {
+                return 60.0;
+            }
                 let pct = ((val - (min_rear - pad_rear)) / range).clamp(0.0, 1.0);
                 45.5 + pct * 29.0
             };
@@ -462,9 +580,13 @@ impl LoadedSession {
             let pad_rk = (max_rake_val - min_rake_val) * 0.1;
 
             let scale_rake = |val: f64| -> f64 {
-                if max_rake_val == min_rake_val { return 24.0; }
-                let pct = ((val - (min_rake_val - pad_rk)) / ((max_rake_val + pad_rk) - (min_rake_val - pad_rk))).clamp(0.0, 1.0);
-                12.0 + pct * (36.0 - 12.0)
+            if max_rake_val == min_rake_val {
+                return 60.0;
+            }
+            let pct = ((val - (min_rake_val - pad_rk))
+                / ((max_rake_val + pad_rk) - (min_rake_val - pad_rk)))
+                .clamp(0.0, 1.0);
+            45.5 + pct * 29.0
             };
 
             let min_latg = latg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
@@ -476,8 +598,11 @@ impl LoadedSession {
             let pad_g = (max_g - min_g) * 0.1;
             
             let scale_g = |val: f64| -> f64 {
-                if max_g == min_g { return 25.0; }
-                let pct = ((val - (min_g - pad_g)) / ((max_g + pad_g) - (min_g - pad_g))).clamp(0.0, 1.0);
+            if max_g == min_g {
+                return 25.0;
+            }
+            let pct =
+                ((val - (min_g - pad_g)) / ((max_g + pad_g) - (min_g - pad_g))).clamp(0.0, 1.0);
                 10.0 + pct * (40.0 - 10.0)
             };
 
@@ -509,7 +634,9 @@ impl LoadedSession {
             let df = &session.dataframe;
             let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
             let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
-            if lap_col_opt.is_none() || time_col_opt.is_none() { return Err("Lap/Time missing".into()); }
+        if lap_col_opt.is_none() || time_col_opt.is_none() {
+            return Err("Lap/Time missing".into());
+        }
             let lap_col = lap_col_opt.unwrap();
             let time_col = time_col_opt.unwrap();
             let session_start = time_col.get(0).unwrap_or(0.0);
@@ -558,9 +685,14 @@ impl LoadedSession {
 
             let df = &session.dataframe;
             let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
-            let dist_col_opt = df.column("Distance_Derived").ok().and_then(|c| c.f64().ok());
+        let dist_col_opt = df
+            .column("Distance_Derived")
+            .ok()
+            .and_then(|c| c.f64().ok());
             let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
-            if lap_col_opt.is_none() || dist_col_opt.is_none() || time_col_opt.is_none() { return Err("Lap/Dist/Time missing".into()); }
+        if lap_col_opt.is_none() || dist_col_opt.is_none() || time_col_opt.is_none() {
+            return Err("Lap/Dist/Time missing".into());
+        }
             let lap_col = lap_col_opt.unwrap();
             let dist_col = dist_col_opt.unwrap();
             let time_col = time_col_opt.unwrap();
@@ -589,10 +721,18 @@ impl LoadedSession {
                     let lat_val = la.get(i).unwrap_or(0.0);
                     let lon_val = lo.get(i).unwrap_or(0.0);
                     if lat_val != 0.0 && lon_val != 0.0 {
-                        if lat_val < min_lat { min_lat = lat_val; }
-                        if lat_val > max_lat { max_lat = lat_val; }
-                        if lon_val < min_lon { min_lon = lon_val; }
-                        if lon_val > max_lon { max_lon = lon_val; }
+                    if lat_val < min_lat {
+                        min_lat = lat_val;
+                    }
+                    if lat_val > max_lat {
+                        max_lat = lat_val;
+                    }
+                    if lon_val < min_lon {
+                        min_lon = lon_val;
+                    }
+                    if lon_val > max_lon {
+                        max_lon = lon_val;
+                    }
                     }
                 }
             }
@@ -641,8 +781,12 @@ impl LoadedSession {
                 if !dists.is_empty() {
                     let base_dist = dists[0];
                     let base_time = times[0];
-                    for d in &mut dists { *d -= base_dist; }
-                    for t in &mut times { *t -= base_time; }
+                for d in &mut dists {
+                    *d -= base_dist;
+                }
+                for t in &mut times {
+                    *t -= base_time;
+                }
                     data_cache.push(LapData {
                         lap_num: l_num,
                         dist: dists,
@@ -765,14 +909,20 @@ impl LoadedSession {
 
 impl OpenDavApp {
     pub fn update_lap_deltas(&mut self) {
-        if self.sessions.is_empty() { return; }
+        if self.sessions.is_empty() {
+            return;
+        }
         
         let ref_lap_opt = self.ref_lap_cyan.or(self.ref_lap_white);
-        if ref_lap_opt.is_none() { return; }
+        if ref_lap_opt.is_none() {
+            return;
+        }
         let (ref_sess_idx, ref_lap_num) = ref_lap_opt.unwrap();
         let p_idx = self.primary_session_idx;
         
-        if ref_sess_idx >= self.sessions.len() || p_idx >= self.sessions.len() { return; }
+        if ref_sess_idx >= self.sessions.len() || p_idx >= self.sessions.len() {
+            return;
+        }
         
         let mut dist_delta = Vec::new();
         let mut time_delta = Vec::new();
@@ -781,8 +931,13 @@ impl OpenDavApp {
             let p_session = &self.sessions[p_idx];
             let r_session = &self.sessions[ref_sess_idx];
             
-            let r_lap = r_session.lap_data_cache.iter().find(|l| l.lap_num == ref_lap_num);
-            if r_lap.is_none() { return; }
+            let r_lap = r_session
+                .lap_data_cache
+                .iter()
+                .find(|l| l.lap_num == ref_lap_num);
+            if r_lap.is_none() {
+                return;
+            }
             let r_lap = r_lap.unwrap();
             
             // For each point in primary cache, we find its lap, then find its distance into lap
@@ -803,12 +958,22 @@ impl OpenDavApp {
                 }
                 
                 if let Some(l_num) = found_lap_num {
-                    if let Some(p_lap) = p_session.lap_data_cache.iter().find(|l| l.lap_num == l_num) {
+                    if let Some(p_lap) =
+                        p_session.lap_data_cache.iter().find(|l| l.lap_num == l_num)
+                    {
                         let p_time_into_lap = p_t - lap_start_t;
-                        let p_idx_in_lap = p_lap.time.binary_search_by(|t| t.partial_cmp(&p_time_into_lap).unwrap()).unwrap_or_else(|x| x).min(p_lap.time.len().saturating_sub(1));
+                        let p_idx_in_lap = p_lap
+                            .time
+                            .binary_search_by(|t| t.partial_cmp(&p_time_into_lap).unwrap())
+                            .unwrap_or_else(|x| x)
+                            .min(p_lap.time.len().saturating_sub(1));
                         let dist_into_lap = p_lap.dist[p_idx_in_lap];
                         
-                        let r_idx_in_lap = r_lap.dist.binary_search_by(|d| d.partial_cmp(&dist_into_lap).unwrap()).unwrap_or_else(|x| x).min(r_lap.dist.len().saturating_sub(1));
+                        let r_idx_in_lap = r_lap
+                            .dist
+                            .binary_search_by(|d| d.partial_cmp(&dist_into_lap).unwrap())
+                            .unwrap_or_else(|x| x)
+                            .min(r_lap.dist.len().saturating_sub(1));
                         
                         let r_time_into_lap = r_lap.time[r_idx_in_lap];
                         
@@ -839,21 +1004,50 @@ impl OpenDavApp {
     }
 
     pub fn update_sector_deltas(&mut self) {
-        if self.sessions.is_empty() { return; }
-        let p_idx = self.primary_session_idx;
-        let loaded = &self.sessions[p_idx];
+        self.comparison_cyan = None;
+        self.comparison_secondary = None;
+        self.sector_deltas.clear();
+        if self.sessions.is_empty() {
+            return;
+        }
 
-        let ref_lap = self.ref_lap_cyan.or(self.ref_lap_white).map(|(_, lap)| lap);
-        let active_lap_num = self.selected_lap.map(|(_, lap)| lap).or_else(|| {
-            Some(crate::signals::processing::get_fastest_lap(&loaded.session.lap_times))
+        let p_idx = self.primary_session_idx;
+        let active_lap_num = self
+            .selected_lap
+            .filter(|(session_idx, _)| *session_idx == p_idx)
+            .map(|(_, lap)| lap)
+            .unwrap_or_else(|| {
+                crate::signals::processing::get_fastest_lap(&self.sessions[p_idx].session.lap_times)
         });
         
-        self.sector_deltas = crate::signals::processing::recalculate_sector_deltas(
-            &loaded.lap_data_cache,
-            &loaded.sectors,
-            active_lap_num,
-            ref_lap,
-        );
+        let build = |reference: Option<(usize, i32)>| {
+            let (reference_session, reference_lap) = reference?;
+            let selection = crate::signals::comparison::ComparisonSelection {
+                primary: crate::signals::comparison::LapSelection {
+                    session_index: p_idx,
+                    lap_num: active_lap_num,
+                },
+                reference: crate::signals::comparison::LapSelection {
+                    session_index: reference_session,
+                    lap_num: reference_lap,
+                },
+            };
+            crate::signals::comparison::build_comparison_cache(
+                &self.sessions,
+                selection,
+                &crate::signals::comparison::COMPARISON_CHANNELS,
+            )
+            .ok()
+        };
+
+        self.comparison_cyan = build(self.ref_lap_cyan);
+        self.comparison_secondary = build(self.ref_lap_white);
+        self.sector_deltas = self
+            .comparison_cyan
+            .as_ref()
+            .or(self.comparison_secondary.as_ref())
+            .map(|cache| cache.sector_deltas.clone())
+            .unwrap_or_default();
     }
 }
 
@@ -861,7 +1055,9 @@ impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // --- GLOBAL DRAG & DROP SUPPORT ---
         let dropped_ibt_files: Vec<std::path::PathBuf> = ctx.input(|i| {
-            i.raw.dropped_files.iter()
+            i.raw
+                .dropped_files
+                .iter()
                 .filter_map(|f| f.path.clone())
                 .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ibt"))
                 .collect()
@@ -896,30 +1092,8 @@ impl eframe::App for OpenDavApp {
 
         // --- DYNAMIC BRAND THEMING SWITCHER ---
         let mut style = (*ctx.global_style()).clone();
-        
-        // Ensure egui's visuals match our settings
         let is_dark = self.settings.dark_mode;
-        if style.visuals.dark_mode != is_dark {
-            style.visuals = if is_dark { egui::Visuals::dark() } else { egui::Visuals::light() };
-        }
-        
-        if is_dark {
-            style.visuals.window_fill = DARK_BG_COLOR;
-            style.visuals.panel_fill = DARK_BG_COLOR;
-            style.visuals.selection.bg_fill = ACCENT_COLOR;
-            style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(20, 20, 20);
-            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(30, 30, 30);
-            style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(15, 15, 15);
-            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8));
-        } else {
-            style.visuals.window_fill = LIGHT_BG_COLOR;
-            style.visuals.panel_fill = LIGHT_BG_COLOR;
-            style.visuals.selection.bg_fill = ACCENT_COLOR;
-            style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(215, 214, 213);
-            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(240, 239, 238);
-            style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(235, 234, 233);
-            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 15));
-        }
+        crate::config::theme::AppTheme::for_mode(is_dark).apply(&mut style);
         ctx.set_global_style(style);
 
         match self.app_state {
@@ -955,7 +1129,8 @@ impl eframe::App for OpenDavApp {
                     if let Some((s_idx, lap_num)) = self.selected_lap {
                         if s_idx < self.sessions.len() {
                             let loaded = &self.sessions[s_idx];
-                            if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == lap_num) {
+                            if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == lap_num)
+                            {
                                 let (_, start_t, end_t) = loaded.lap_ranges[pos];
                                 
                                 let mut loop_start = start_t;
@@ -1072,20 +1247,35 @@ fn main() -> eframe::Result<()> {
 
 impl OpenDavApp {
     pub fn load_telemetry_file(&mut self, path: &std::path::Path) {
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         self.active_file = Some(file_name.clone());
         match crate::data::ibt_parser::parse_ibt_file(path.to_str().unwrap_or("")) {
             Ok(parsed_session) => {
                 self.session_loaded = true;
                 crate::signals::processing::trigger_track_map_download(parsed_session.track_id);
                 
-                match crate::LoadedSession::new(file_name, parsed_session, self.settings.corner_merge_threshold, &self.settings.mapbox_api_key) {
+                match crate::LoadedSession::new(
+                    file_name,
+                    parsed_session,
+                    self.settings.corner_merge_threshold,
+                    &self.settings.mapbox_api_key,
+                ) {
                     Ok(new_session) => {
                         self.sessions.push(new_session);
                         let new_idx = self.sessions.len() - 1;
                         self.primary_session_idx = new_idx;
-                        let fastest = crate::signals::processing::get_fastest_lap(&self.sessions[new_idx].session.lap_times);
-                        self.selected_lap = if fastest > 0 { Some((new_idx, fastest)) } else { None };
+                        let fastest = crate::signals::processing::get_fastest_lap(
+                            &self.sessions[new_idx].session.lap_times,
+                        );
+                        self.selected_lap = if fastest > 0 {
+                            Some((new_idx, fastest))
+                        } else {
+                            None
+                        };
                         self.cursor_x = None;
                         self.update_sector_deltas();
         self.update_lap_deltas();
@@ -1093,7 +1283,7 @@ impl OpenDavApp {
                         self.reset_bounds_next_frame = 3;
                         self.reset_track_map_bounds_flag = true;
                         self.reset_track_map_bounds_next_frame = 3;
-                    },
+                    }
                     Err(e) => {
                         eprintln!("Failed to initialize session: {}", e);
                     }
@@ -1113,23 +1303,47 @@ impl LoadedSession {
     pub fn fetch_satellite_maps(&mut self, mapbox_api_key: &str) {
         if let Some((min_lon, min_lat, max_lon, max_lat)) = self.track_bounds {
             let track_id = self.session.track_id;
-            let mapbox_path = std::path::Path::new("assets/maps").join(format!("{}_dark.png", track_id));
-            let google_path = std::path::Path::new("assets/maps").join(format!("{}_google.png", track_id));
+            let mapbox_path =
+                std::path::Path::new("assets/maps").join(format!("{}_dark.png", track_id));
+            let google_path =
+                std::path::Path::new("assets/maps").join(format!("{}_google.png", track_id));
             
             let fetch_result = if mapbox_path.exists() {
-                crate::signals::mapbox::fetch_mapbox_image(mapbox_api_key, track_id, min_lon, min_lat, max_lon, max_lat, 16)
+                crate::signals::mapbox::fetch_mapbox_image(
+                    mapbox_api_key,
+                    track_id,
+                    min_lon,
+                    min_lat,
+                    max_lon,
+                    max_lat,
+                    16,
+                )
             } else if google_path.exists() {
-                crate::signals::google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, 16)
+                crate::signals::google_maps::fetch_google_map_image(
+                    track_id, min_lon, min_lat, max_lon, max_lat, 16,
+                )
             } else {
                 if !mapbox_api_key.trim().is_empty() {
-                    let res = crate::signals::mapbox::fetch_mapbox_image(mapbox_api_key, track_id, min_lon, min_lat, max_lon, max_lat, 16);
+                    let res = crate::signals::mapbox::fetch_mapbox_image(
+                        mapbox_api_key,
+                        track_id,
+                        min_lon,
+                        min_lat,
+                        max_lon,
+                        max_lat,
+                        16,
+                    );
                     if res.is_ok() {
                         res
                     } else {
-                        crate::signals::google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, 16)
+                        crate::signals::google_maps::fetch_google_map_image(
+                            track_id, min_lon, min_lat, max_lon, max_lat, 16,
+                        )
                     }
                 } else {
-                    crate::signals::google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, 16)
+                    crate::signals::google_maps::fetch_google_map_image(
+                        track_id, min_lon, min_lat, max_lon, max_lat, 16,
+                    )
                 }
             };
             
@@ -1142,4 +1356,3 @@ impl LoadedSession {
         }
     }
 }
-

@@ -1,95 +1,246 @@
+use crate::config::theme::AppTheme;
 use crate::OpenDavApp;
-use egui::Color32;
 
 impl OpenDavApp {
     pub fn draw_settings_page(&mut self, ui: &mut egui::Ui, is_dark: bool) {
-        let text_color = if is_dark { Color32::WHITE } else { Color32::BLACK };
+        let theme = AppTheme::for_mode(is_dark);
         
-        ui.vertical_centered(|ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("settings_page_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
             ui.add_space(20.0);
-            ui.heading(egui::RichText::new("Application Settings").color(text_color).size(32.0));
-            ui.add_space(30.0);
-        });
+                ui.vertical_centered(|ui| {
+                    ui.set_max_width(860.0);
+                    ui.heading(
+                        egui::RichText::new("Application Settings")
+                            .color(theme.text_primary)
+                            .size(30.0),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Changes are saved automatically as soon as you make them.",
+                        )
+                        .color(theme.text_secondary)
+                        .size(14.0),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("AUTOSAVE ON")
+                            .color(theme.success)
+                            .strong()
+                            .size(12.0),
+                    );
+                    ui.add_space(24.0);
 
-        ui.horizontal(|ui| {
-            ui.add_space(20.0);
-            ui.vertical(|ui| {
-                ui.group(|ui| {
-                    ui.set_width(ui.available_width() - 20.0);
-                    ui.add_space(10.0);
-                    ui.heading(egui::RichText::new("Algorithm Tuning").color(text_color).size(24.0));
-                    ui.add_space(15.0);
-                    
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Corner Merge Gap Threshold (meters):").color(text_color).size(16.0));
-                        ui.add_space(10.0);
-                        
-                        let drag = egui::DragValue::new(&mut self.settings.corner_merge_threshold)
+                    egui::Frame::NONE
+                        .fill(theme.surface_elevated)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(10.0)
+                        .inner_margin(20.0)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                ui.heading(
+                                    egui::RichText::new("Algorithm Tuning")
+                                        .color(theme.text_primary)
+                                        .size(21.0),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Tune how telemetry is interpreted without changing the source data.",
+                                    )
+                                    .color(theme.text_secondary)
+                                    .size(14.0),
+                                );
+                                ui.add_space(18.0);
+
+                                let is_narrow = ui.available_width() < 540.0;
+                                let label = egui::RichText::new("Corner merge gap")
+                                    .color(theme.text_primary)
+                                    .strong()
+                                    .size(15.0);
+                                let draw_threshold = |ui: &mut egui::Ui, app: &mut Self| {
+                                    let response = ui.add(
+                                        egui::DragValue::new(
+                                            &mut app.settings.corner_merge_threshold,
+                                        )
                             .speed(0.5)
-                            .clamp_range(5.0..=100.0)
-                            .suffix(" m");
-                        
-                        let response = ui.add(drag);
+                                        .range(5.0..=100.0)
+                                        .suffix(" m"),
+                                    );
                         
                         if response.changed() {
-                            let threshold = self.settings.corner_merge_threshold;
-                            for session in &mut self.sessions {
+                                        let threshold = app.settings.corner_merge_threshold;
+                                        for session in &mut app.sessions {
                                 session.recalculate_sectors(threshold);
                             }
-                            self.settings.save();
+                                        app.settings.save();
                         }
-                    });
+                                };
                     
-                    ui.add_space(10.0);
-                    ui.label(egui::RichText::new("Adjust this to control how aggressively tight chicanes are merged into single corners.").color(Color32::GRAY).size(14.0));
-                    ui.add_space(15.0);
-                    
+                                if is_narrow {
+                                    ui.label(label);
+                                    ui.add_space(6.0);
+                                    draw_threshold(ui, self);
+                                } else {
                     ui.horizontal(|ui| {
-                        let mut use_metric = self.settings.use_metric;
-                        let metric_resp = ui.checkbox(&mut use_metric, egui::RichText::new("Use Metric Units (km/h, mm, kg)").color(text_color).size(16.0));
-                        
-                        if metric_resp.changed() {
-                        self.settings.use_metric = use_metric;
-                        self.settings.save();
-                    }
+                                        ui.label(label);
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| draw_threshold(ui, self),
+                                        );
                 });
-                ui.add_space(5.0);
-                ui.label(egui::RichText::new("If disabled, displays Imperial Units (mph, in, lbs).").color(Color32::GRAY).size(14.0));
+                                }
+                                ui.add_space(6.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(
+                                            "Controls how aggressively tight chicanes are merged into a single corner.",
+                                        )
+                                        .color(theme.text_tertiary)
+                                        .size(13.0),
+                                    )
+                                    .wrap(),
+                                );
+
+                                ui.add_space(18.0);
+                                ui.separator();
+                                ui.add_space(18.0);
+
+                                let unit_label = egui::RichText::new("Unit system")
+                                    .color(theme.text_primary)
+                                    .strong()
+                                    .size(15.0);
+                                let draw_unit_toggle = |ui: &mut egui::Ui, app: &mut Self| {
+                                    let mut use_metric = app.settings.use_metric;
+                                    let response = ui.checkbox(
+                                        &mut use_metric,
+                                        egui::RichText::new("Metric (km/h, mm, kg)")
+                                            .color(theme.text_primary)
+                                            .size(14.0),
+                                    );
+                                    if response.changed() {
+                                        app.settings.use_metric = use_metric;
+                                        app.settings.save();
+                                    }
+                                };
                 
-                ui.add_space(20.0);
-                ui.heading(egui::RichText::new("Map Integration").color(text_color).size(24.0));
-                ui.add_space(15.0);
-                
+                                if is_narrow {
+                                    ui.label(unit_label);
+                                    ui.add_space(6.0);
+                                    draw_unit_toggle(ui, self);
+                                } else {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Mapbox API Key (Optional):").color(text_color).size(16.0));
-                    ui.add_space(10.0);
-                    
-                    let mut api_key = self.settings.mapbox_api_key.clone();
-                    let response = ui.add(egui::TextEdit::singleline(&mut api_key).password(true).desired_width(300.0));
-                    
-                    if response.changed() {
-                        self.settings.mapbox_api_key = api_key;
-                        self.settings.save();
+                                        ui.label(unit_label);
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| draw_unit_toggle(ui, self),
+                                        );
+                                    });
                     }
+                                ui.add_space(6.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(
+                                            "Turn this off to display imperial units such as mph, inches, and pounds.",
+                                        )
+                                        .color(theme.text_tertiary)
+                                        .size(13.0),
+                                    )
+                                    .wrap(),
+                                );
                 });
-                ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Leaves Google Maps and enables ultra high-res Mapbox satellite imagery for custom tracks. ").color(Color32::GRAY).size(14.0));
-                    ui.hyperlink_to("Get a free key here.", "https://account.mapbox.com/auth/signup/");
                 });
                 
-                ui.add_space(30.0);
-                
-                if ui.button(egui::RichText::new("Save Settings").color(text_color).size(16.0)).clicked() {
-                        let threshold = self.settings.corner_merge_threshold;
-                        for session in &mut self.sessions {
-                            session.recalculate_sectors(threshold);
+                    ui.add_space(16.0);
+
+                    egui::Frame::NONE
+                        .fill(theme.surface_card)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(10.0)
+                        .inner_margin(20.0)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                                ui.heading(
+                                    egui::RichText::new("Map Integration")
+                                        .color(theme.text_primary)
+                                        .size(21.0),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Connect Mapbox for high-resolution satellite imagery on custom tracks.",
+                                    )
+                                    .color(theme.text_secondary)
+                                    .size(14.0),
+                                );
+                                ui.add_space(18.0);
+
+                                let is_narrow = ui.available_width() < 540.0;
+                                let label = egui::RichText::new("Mapbox API key (optional)")
+                                    .color(theme.text_primary)
+                                    .strong()
+                                    .size(15.0);
+                                let draw_api_key = |ui: &mut egui::Ui, app: &mut Self| {
+                                    let width = ui.available_width().min(360.0);
+                                    let response = ui.add_sized(
+                                        [width, 26.0],
+                                        egui::TextEdit::singleline(
+                                            &mut app.settings.mapbox_api_key,
+                                        )
+                                        .password(true)
+                                        .hint_text("Paste API key"),
+                                    );
+                                    if response.changed() {
+                                        app.settings.save();
                         }
-                        self.settings.save();
+                                };
+
+                                if is_narrow {
+                                    ui.label(label);
+                                    ui.add_space(6.0);
+                                    draw_api_key(ui, self);
+                                } else {
+                                    ui.horizontal(|ui| {
+                                        ui.label(label);
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| draw_api_key(ui, self),
+                                        );
+                                    });
                     }
-                    ui.add_space(10.0);
+                                ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Overrides Google Maps imagery when configured.",
+                                        )
+                                        .color(theme.text_tertiary)
+                                        .size(13.0),
+                                    );
+                                    ui.hyperlink_to(
+                                        egui::RichText::new("Get a free Mapbox key")
+                                            .color(theme.accent_text)
+                                            .size(13.0),
+                                        "https://account.mapbox.com/auth/signup/",
+                                    );
+                                });
                 });
             });
+
+                    ui.add_space(24.0);
+                    ui.label(
+                        egui::RichText::new("No save action is required.")
+                            .color(theme.text_tertiary)
+                            .italics()
+                            .size(13.0),
+                    );
+                    ui.add_space(24.0);
+                });
         });
     }
 }

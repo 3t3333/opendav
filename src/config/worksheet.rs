@@ -38,8 +38,6 @@ pub enum CacheSelector {
     TimeDelta,
 }
 
-
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LaneScaling {
     Mono,
@@ -67,7 +65,7 @@ pub struct WorksheetConfig {
 }
 
 impl WorksheetConfig {
-    pub fn driver() -> Self {
+    pub fn driver(theme: AppTheme) -> Self {
         Self {
             lanes: vec![
                 LaneSpec {
@@ -75,9 +73,13 @@ impl WorksheetConfig {
                     y_min: 76.0,
                     y_max: 98.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
-                        TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
-                    ],
+                    traces: vec![TraceSpec {
+                        name: "Speed",
+                        cache: CacheSelector::Speed,
+                        color: theme.speed,
+                        width: 2.2,
+                        unit: " km/h",
+                    }],
                 },
                 LaneSpec {
                     title: "Engine RPM",
@@ -85,8 +87,20 @@ impl WorksheetConfig {
                     y_max: 72.0,
                     scaling: LaneScaling::Mono,
             traces: vec![
-                        TraceSpec { name: "RPM", cache: CacheSelector::RPM, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, unit: "" },
-                        TraceSpec { name: "Gear", cache: CacheSelector::Gear, color: egui::Color32::from_rgb(255, 105, 180), width: 1.8, unit: "" },
+                        TraceSpec {
+                            name: "RPM",
+                            cache: CacheSelector::RPM,
+                            color: theme.rpm,
+                            width: 2.2,
+                            unit: "",
+                        },
+                        TraceSpec {
+                            name: "Gear",
+                            cache: CacheSelector::Gear,
+                            color: theme.gear,
+                            width: 1.8,
+                            unit: "",
+                        },
                     ],
                 },
                 LaneSpec {
@@ -95,9 +109,27 @@ impl WorksheetConfig {
                     y_max: 48.0,
                     scaling: LaneScaling::Mono,
             traces: vec![
-                        TraceSpec { name: "Throttle", cache: CacheSelector::Throttle, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, unit: "%" },
-                        TraceSpec { name: "Brake", cache: CacheSelector::Brake, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, unit: "%" },
-                        TraceSpec { name: "ClutchRaw", cache: CacheSelector::Clutch, color: egui::Color32::from_rgb(52, 152, 219), width: 2.2, unit: "%" },
+                        TraceSpec {
+                            name: "Throttle",
+                            cache: CacheSelector::Throttle,
+                            color: theme.throttle,
+                            width: 2.2,
+                            unit: "%",
+                        },
+                        TraceSpec {
+                            name: "Brake",
+                            cache: CacheSelector::Brake,
+                            color: theme.brake,
+                            width: 2.2,
+                            unit: "%",
+                        },
+                        TraceSpec {
+                            name: "ClutchRaw",
+                            cache: CacheSelector::Clutch,
+                            color: theme.clutch,
+                            width: 2.2,
+                            unit: "%",
+                        },
                     ],
                 },
                 LaneSpec {
@@ -105,15 +137,19 @@ impl WorksheetConfig {
                     y_min: 10.0,
                     y_max: 24.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
-                        TraceSpec { name: "Steering Angle", cache: CacheSelector::Steering, color: SUB_ACCENT_COLOR, width: 2.2, unit: "°" },
-                    ],
+                    traces: vec![TraceSpec {
+                        name: "Steering Angle",
+                        cache: CacheSelector::Steering,
+                        color: theme.steering,
+                        width: 2.2,
+                        unit: "°",
+                    }],
                 },
             ],
         }
     }
 
-    pub fn vehicle() -> Self {
+    pub fn vehicle(theme: AppTheme) -> Self {
         Self {
             lanes: vec![
                 LaneSpec {
@@ -121,9 +157,13 @@ impl WorksheetConfig {
                     y_min: 76.0,
                     y_max: 98.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
-                        TraceSpec { name: "Speed", cache: CacheSelector::Speed, color: SPEED_COLOR, width: 2.2, unit: " km/h" },
-                    ],
+                    traces: vec![TraceSpec {
+                        name: "Speed",
+                        cache: CacheSelector::Speed,
+                        color: theme.speed,
+                        width: 2.2,
+                        unit: " km/h",
+                    }],
                 },
                 LaneSpec {
                     title: "Ride Heights & Rake",
@@ -131,9 +171,27 @@ impl WorksheetConfig {
                     y_max: 75.0,
                     scaling: LaneScaling::Mono,
             traces: vec![
-                        TraceSpec { name: "Front Height", cache: CacheSelector::FrontHeight, color: egui::Color32::from_rgb(46, 204, 113), width: 2.2, unit: " mm" },
-                        TraceSpec { name: "Rear Height", cache: CacheSelector::RearHeight, color: egui::Color32::from_rgb(241, 196, 15), width: 2.2, unit: " mm" },
-                        TraceSpec { name: "Dynamic Rake", cache: CacheSelector::Rake, color: SUB_ACCENT_COLOR, width: 2.2, unit: " mm" },
+                        TraceSpec {
+                            name: "Front Height",
+                            cache: CacheSelector::FrontHeight,
+                            color: theme.throttle,
+                            width: 2.2,
+                            unit: " mm",
+                        },
+                        TraceSpec {
+                            name: "Rear Height",
+                            cache: CacheSelector::RearHeight,
+                            color: theme.rpm,
+                            width: 2.2,
+                            unit: " mm",
+                        },
+                        TraceSpec {
+                            name: "Dynamic Rake",
+                            cache: CacheSelector::Rake,
+                            color: theme.steering,
+                            width: 2.2,
+                            unit: " mm",
+                        },
                     ],
                 },
                 LaneSpec {
@@ -142,11 +200,24 @@ impl WorksheetConfig {
                     y_max: 40.0,
                     scaling: LaneScaling::Mono,
             traces: vec![
-                        TraceSpec { name: "Lateral G", cache: CacheSelector::LatG, color: egui::Color32::from_rgb(231, 76, 60), width: 2.2, unit: " G" },
-                        TraceSpec { name: "Longitudinal G", cache: CacheSelector::LongG, color: egui::Color32::from_rgb(52, 152, 219), width: 2.2, unit: " G" },
+                        TraceSpec {
+                            name: "Lateral G",
+                            cache: CacheSelector::LatG,
+                            color: theme.brake,
+                            width: 2.2,
+                            unit: " G",
+                        },
+                        TraceSpec {
+                            name: "Longitudinal G",
+                            cache: CacheSelector::LongG,
+                            color: theme.clutch,
+                            width: 2.2,
+                            unit: " G",
+                        },
                     ],
                 },
             ],
         }
     }
 }
+use crate::config::theme::AppTheme;

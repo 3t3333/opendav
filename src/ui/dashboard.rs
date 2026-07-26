@@ -1,8 +1,9 @@
-use rfd::FileDialog;
-use crate::OpenDavApp;
+use crate::config::theme::AppTheme;
+use crate::config::worksheet::{ACCENT_COLOR, DARK_BG_COLOR};
+use crate::signals::processing::{format_lap_time, get_fastest_lap};
 use crate::ActivePage;
-use crate::config::worksheet::{WorksheetTab, ACCENT_COLOR, SUB_ACCENT_COLOR, DARK_BG_COLOR, LIGHT_BG_COLOR};
-use crate::signals::processing::{get_fastest_lap, format_lap_time, trigger_track_map_download};
+use crate::OpenDavApp;
+use rfd::FileDialog;
 
 impl OpenDavApp {
     pub fn draw_splash_screen(&mut self, ctx: &egui::Context, progress: f32) {
@@ -10,7 +11,9 @@ impl OpenDavApp {
         let panel_frame = egui::Frame::central_panel(&ctx.style())
             .fill(DARK_BG_COLOR)
             .inner_margin(egui::Margin::same(0));
-        egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
+        egui::CentralPanel::default()
+            .frame(panel_frame)
+            .show(ctx, |ui| {
             let size = ui.available_size();
             
             let bg_bytes = include_bytes!("../../assets/splash_bg.jpg");
@@ -21,7 +24,8 @@ impl OpenDavApp {
             ui.put(bg_rect, bg_img);
             
             // Dark overlay
-            ui.painter().rect_filled(bg_rect, 0.0, egui::Color32::from_black_alpha(220));
+                ui.painter()
+                    .rect_filled(bg_rect, 0.0, egui::Color32::from_black_alpha(220));
             
             // Center the logo and loading bar vertically and horizontally
             let logo2_width = 550.0;
@@ -31,13 +35,13 @@ impl OpenDavApp {
             
             let logo2_rect = egui::Rect::from_min_size(
                 egui::pos2((size.x - logo2_width) / 2.0, start_y),
-                egui::vec2(logo2_width, logo2_height)
+                    egui::vec2(logo2_width, logo2_height),
             );
 
             let logo1_width = 300.0;
             let logo1_rect = egui::Rect::from_center_size(
                 logo2_rect.center(),
-                egui::vec2(logo1_width, logo1_width)
+                    egui::vec2(logo1_width, logo1_width),
             );
             
             let logo1_bytes = include_bytes!("../../assets/logo_transparent_lighttext.png");
@@ -57,14 +61,20 @@ impl OpenDavApp {
             };
             
             if alpha1 > 0.0 {
-                let img = egui::Image::from_bytes("bytes://logo_transparent_lighttext_splash.png", logo1_bytes.to_vec())
+                    let img = egui::Image::from_bytes(
+                        "bytes://logo_transparent_lighttext_splash.png",
+                        logo1_bytes.to_vec(),
+                    )
                     .show_loading_spinner(false)
                     .tint(egui::Color32::from_white_alpha((alpha1 * 255.0) as u8));
                 ui.put(logo1_rect, img);
             }
             
             if alpha2 > 0.0 {
-                let img = egui::Image::from_bytes("bytes://opendav_transparent_lighttext_splash.png", logo2_bytes.to_vec())
+                    let img = egui::Image::from_bytes(
+                        "bytes://opendav_transparent_lighttext_splash.png",
+                        logo2_bytes.to_vec(),
+                    )
                     .show_loading_spinner(false)
                     .tint(egui::Color32::from_white_alpha((alpha2 * 255.0) as u8));
                 ui.put(logo2_rect, img);
@@ -75,7 +85,7 @@ impl OpenDavApp {
             let bar_height = 3.0; // Thin and elegant
             let bar_rect = egui::Rect::from_center_size(
                 egui::pos2(size.x / 2.0, logo2_rect.max.y + 40.0),
-                egui::vec2(bar_width, bar_height)
+                    egui::vec2(bar_width, bar_height),
             );
             
             let progress_bg = egui::Color32::from_rgb(25, 25, 25);
@@ -91,6 +101,7 @@ impl OpenDavApp {
 
     pub fn draw_sidebar(&mut self, ctx: &egui::Context) {
         let is_dark = ctx.style().visuals.dark_mode;
+        let theme = AppTheme::for_mode(is_dark);
 
         // 1. GRAPHS PAGE: WORKSPACE TABS + INDEPENDENT MAP TOGGLE
         if self.active_page == ActivePage::Graphs {
@@ -100,7 +111,7 @@ impl OpenDavApp {
             egui::SidePanel::left("details_tab_strip")
                 .resizable(false)
                 .exact_width(38.0)
-                .frame(egui::Frame::none().fill(if is_dark { egui::Color32::from_rgb(18, 20, 24) } else { egui::Color32::from_rgb(220, 222, 225) }))
+                .frame(egui::Frame::none().fill(theme.surface_panel))
                 .show(ctx, |ui| {
                     ui.add_space(15.0);
                     
@@ -112,13 +123,14 @@ impl OpenDavApp {
                     for (tab_type, label_text) in tab_configs {
                         let is_tab_active = active_tab == Some(tab_type);
                         let btn_size = egui::vec2(30.0, 95.0);
-                        let (rect, response) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let (rect, response) =
+                            ui.allocate_exact_size(btn_size, egui::Sense::click());
                         let is_hovered = response.hovered();
                         
                         let bg_color = if is_tab_active {
-                            if is_dark { egui::Color32::from_rgb(32, 38, 46) } else { egui::Color32::from_rgb(195, 200, 208) }
+                            theme.surface_elevated
                         } else if is_hovered {
-                            if is_dark { egui::Color32::from_rgb(26, 30, 36) } else { egui::Color32::from_rgb(205, 210, 216) }
+                            theme.surface_card
                         } else {
                             egui::Color32::TRANSPARENT
                         };
@@ -126,31 +138,44 @@ impl OpenDavApp {
                         let stroke_color = if is_tab_active {
                             ACCENT_COLOR
                         } else if is_hovered {
-                            if is_dark { egui::Color32::from_rgb(80, 90, 100) } else { egui::Color32::from_rgb(160, 170, 180) }
+                            theme.border_strong
                         } else {
                             egui::Color32::TRANSPARENT
                         };
 
                         ui.painter().rect_filled(rect, 4.0, bg_color);
                         if stroke_color != egui::Color32::TRANSPARENT {
-                            ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
+                            ui.painter().rect_stroke(
+                                rect,
+                                4.0,
+                                egui::Stroke::new(1.5, stroke_color),
+                                egui::StrokeKind::Inside,
+                            );
                         }
 
                         let text_color = if is_tab_active {
-                            ACCENT_COLOR
+                            theme.accent_text
                         } else if is_hovered {
-                            if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                            theme.text_primary
                         } else {
-                            if is_dark { egui::Color32::from_rgb(160, 170, 180) } else { egui::Color32::from_rgb(90, 100, 110) }
+                            theme.text_tertiary
                         };
 
                         let font_id = egui::FontId::proportional(11.0);
-                        let galley = ui.painter().layout_no_wrap(label_text.to_string(), font_id, text_color);
+                        let galley = ui.painter().layout_no_wrap(
+                            label_text.to_string(),
+                            font_id,
+                            text_color,
+                        );
                         let text_width = galley.size().x;
                         let text_height = galley.size().y;
 
-                        let rotated_origin = egui::pos2(rect.center().x - text_height / 2.0, rect.center().y + text_width / 2.0);
-                        let mut shape = egui::epaint::TextShape::new(rotated_origin, galley, text_color);
+                        let rotated_origin = egui::pos2(
+                            rect.center().x - text_height / 2.0,
+                            rect.center().y + text_width / 2.0,
+                        );
+                        let mut shape =
+                            egui::epaint::TextShape::new(rotated_origin, galley, text_color);
                         shape.angle = -std::f32::consts::FRAC_PI_2;
                         ui.painter().add(egui::Shape::Text(shape));
 
@@ -173,41 +198,47 @@ impl OpenDavApp {
                     let is_hovered = response.hovered();
 
                     let bg_color = if is_map_active {
-                        if is_dark { egui::Color32::from_rgb(32, 38, 46) } else { egui::Color32::from_rgb(195, 200, 208) }
+                        theme.surface_elevated
                     } else if is_hovered {
-                        if is_dark { egui::Color32::from_rgb(26, 30, 36) } else { egui::Color32::from_rgb(205, 210, 216) }
+                        theme.surface_card
                     } else {
                         egui::Color32::TRANSPARENT
                     };
                     let stroke_color = if is_map_active {
                         ACCENT_COLOR
                     } else if is_hovered {
-                        if is_dark { egui::Color32::from_rgb(80, 90, 100) } else { egui::Color32::from_rgb(160, 170, 180) }
+                        theme.border_strong
                     } else {
                         egui::Color32::TRANSPARENT
                     };
 
                     ui.painter().rect_filled(rect, 4.0, bg_color);
                     if stroke_color != egui::Color32::TRANSPARENT {
-                        ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.5, stroke_color), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(
+                            rect,
+                            4.0,
+                            egui::Stroke::new(1.5, stroke_color),
+                            egui::StrokeKind::Inside,
+                        );
                     }
 
                     let text_color = if is_map_active {
-                        ACCENT_COLOR
+                        theme.accent_text
                     } else if is_hovered {
-                        if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
-                    } else if is_dark {
-                        egui::Color32::from_rgb(160, 170, 180)
+                        theme.text_primary
                     } else {
-                        egui::Color32::from_rgb(90, 100, 110)
+                        theme.text_tertiary
                     };
                     let font_id = egui::FontId::proportional(11.0);
-                    let galley = ui.painter().layout_no_wrap("MAP".to_owned(), font_id, text_color);
+                    let galley = ui
+                        .painter()
+                        .layout_no_wrap("MAP".to_owned(), font_id, text_color);
                     let rotated_origin = egui::pos2(
                         rect.center().x - galley.size().y / 2.0,
                         rect.center().y + galley.size().x / 2.0,
                     );
-                    let mut shape = egui::epaint::TextShape::new(rotated_origin, galley, text_color);
+                    let mut shape =
+                        egui::epaint::TextShape::new(rotated_origin, galley, text_color);
                     shape.angle = -std::f32::consts::FRAC_PI_2;
                     ui.painter().add(egui::Shape::Text(shape));
 
@@ -222,15 +253,22 @@ impl OpenDavApp {
                 });
 
             // B. Collapsible Drawer Panel
-            if let Some(tab) = active_tab {
+            let narrow_workspace = ctx.content_rect().width() < 1180.0;
+            if let Some(tab) =
+                active_tab.filter(|_| !self.show_graphs_track_map || !narrow_workspace)
+            {
                 egui::SidePanel::left("graphs_lap_sidebar")
                     .resizable(false)
                     .default_width(270.0) 
                     .show(ctx, |ui| {
                         ui.add_space(15.0);
                         match tab {
-                            crate::GraphsSidebarTab::Details => self.draw_graphs_sidebar_content(ui, is_dark),
-                            crate::GraphsSidebarTab::Values => self.draw_values_sidebar_content(ui, is_dark),
+                            crate::GraphsSidebarTab::Details => {
+                                self.draw_graphs_sidebar_content(ui, is_dark)
+                            }
+                            crate::GraphsSidebarTab::Values => {
+                                self.draw_values_sidebar_content(ui, is_dark)
+                            }
                         }
                     });
             }
@@ -238,15 +276,15 @@ impl OpenDavApp {
             if self.show_graphs_track_map {
                 egui::SidePanel::left("graphs_track_map_panel")
                     .resizable(true)
-                    .default_width(480.0)
-                    .width_range(320.0..=820.0)
+                    .default_width(if narrow_workspace { 380.0 } else { 480.0 })
+                    .width_range(if narrow_workspace {
+                        300.0..=560.0
+                            } else {
+                        320.0..=820.0
+                            })
                     .frame(
                         egui::Frame::none()
-                            .fill(if is_dark {
-                                egui::Color32::from_rgb(14, 16, 20)
-                            } else {
-                                egui::Color32::from_rgb(232, 234, 238)
-                            })
+                            .fill(theme.surface_panel)
                             .inner_margin(egui::Margin::same(8)),
                     )
                     .show(ctx, |ui| {
@@ -271,14 +309,25 @@ impl OpenDavApp {
             });
     }
 
-    fn draw_main_nav_sidebar_content(&mut self, ui: &mut egui::Ui, _is_dark: bool) {
-        let corner_bytes = include_bytes!("../../assets/logo_transparent_lighttext.png");
+    fn draw_main_nav_sidebar_content(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let theme = AppTheme::for_mode(is_dark);
+        let (logo_id, corner_bytes): (&str, &[u8]) = if is_dark {
+            (
+                "bytes://logo_dark_lighttext.png",
+                include_bytes!("../../assets/logo_dark_lighttext.png"),
+            )
+        } else {
+            (
+                "bytes://logo_light_darktext.png",
+                include_bytes!("../../assets/logo_light_darktext.png"),
+            )
+        };
         ui.vertical_centered(|ui| {
             ui.add(
-                egui::Image::from_bytes("bytes://logo_transparent_lighttext.png", corner_bytes.to_vec())
+                egui::Image::from_bytes(logo_id, corner_bytes.to_vec())
                     .show_loading_spinner(false)
                     .max_width(150.0)
-                    .maintain_aspect_ratio(true)
+                    .maintain_aspect_ratio(true),
             );
         });
 
@@ -306,10 +355,15 @@ impl OpenDavApp {
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
-                hover_f * (1.0 - sel_f) + sel_f
+                hover_f * (1.0 - sel_f) + sel_f,
             );
             if color.a() > 0.01 {
-                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    resp.rect.expand(1.0),
+                    8.0,
+                    egui::Stroke::new(2.0, color),
+                    egui::StrokeKind::Inside,
+                );
             }
             if resp.clicked() {
                 self.active_page = ActivePage::OpenDav;
@@ -332,10 +386,15 @@ impl OpenDavApp {
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
-                hover_f * (1.0 - sel_f) + sel_f
+                hover_f * (1.0 - sel_f) + sel_f,
             );
             if color.a() > 0.01 {
-                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    resp.rect.expand(1.0),
+                    8.0,
+                    egui::Stroke::new(2.0, color),
+                    egui::StrokeKind::Inside,
+                );
             }
             if resp.clicked() {
                 self.active_page = ActivePage::Graphs;
@@ -343,7 +402,11 @@ impl OpenDavApp {
                     let p_idx = self.primary_session_idx;
                     let session = &self.sessions[p_idx].session;
                     let fastest_lap = get_fastest_lap(&session.lap_times);
-                    self.selected_lap = if fastest_lap > 0 { Some((p_idx, fastest_lap)) } else { None };
+                    self.selected_lap = if fastest_lap > 0 {
+                        Some((p_idx, fastest_lap))
+                    } else {
+                        None
+                    };
                 }
             }
 
@@ -364,13 +427,53 @@ impl OpenDavApp {
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).r() * sel_f,
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).g() * sel_f,
                 1.0 * hover_f * (1.0 - sel_f) + egui::Rgba::from(ACCENT_COLOR).b() * sel_f,
-                hover_f * (1.0 - sel_f) + sel_f
+                hover_f * (1.0 - sel_f) + sel_f,
             );
             if color.a() > 0.01 {
-                ui.painter().rect_stroke(resp.rect.expand(1.0), 8.0, egui::Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    resp.rect.expand(1.0),
+                    8.0,
+                    egui::Stroke::new(2.0, color),
+                    egui::StrokeKind::Inside,
+                );
             }
             if resp.clicked() {
                 self.active_page = ActivePage::Reports;
+            }
+
+            ui.add_space(15.0);
+
+            let simgit_bytes = include_bytes!("../../assets/button_simgit.png");
+            let is_simgit_selected = self.active_page == ActivePage::SimGit;
+            let simgit =
+                egui::Image::from_bytes("bytes://button_simgit.png", simgit_bytes.to_vec())
+                    .max_width(240.0)
+                    .corner_radius(8.0)
+                    .sense(egui::Sense::click());
+            let response = ui.add(simgit).on_hover_text("SimGit workspaces");
+            let hover = ui
+                .ctx()
+                .animate_bool(response.id.with("hover"), response.hovered());
+            let selected = ui
+                .ctx()
+                .animate_bool(response.id.with("sel"), is_simgit_selected);
+            let stroke = if selected > 0.0 {
+                egui::Stroke::new(2.0, theme.accent)
+            } else if hover > 0.0 {
+                egui::Stroke::new(1.5, theme.border_strong)
+            } else {
+                egui::Stroke::NONE
+            };
+            if stroke != egui::Stroke::NONE {
+                ui.painter().rect_stroke(
+                    response.rect.expand(1.0),
+                    8.0,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if response.clicked() {
+                self.active_page = ActivePage::SimGit;
             }
 
             ui.add_space(15.0);
@@ -381,24 +484,32 @@ impl OpenDavApp {
             ui.horizontal(|ui| {
                 let is_settings = self.active_page == ActivePage::Settings;
                 
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
                 let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
                 let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_settings);
                 let acc = egui::Rgba::from(ACCENT_COLOR);
                 let base = egui::Rgba::from(egui::Color32::DARK_GRAY);
                 let gear_color: egui::Color32 = egui::Rgba::from_rgba_premultiplied(
-                    base.r() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.r() * sel_f,
-                    base.g() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.g() * sel_f,
-                    base.b() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.b() * sel_f,
-                    base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f
-                ).into();
+                    base.r() * (1.0 - hover_f - sel_f).max(0.0)
+                        + 1.0 * hover_f * (1.0 - sel_f)
+                        + acc.r() * sel_f,
+                    base.g() * (1.0 - hover_f - sel_f).max(0.0)
+                        + 1.0 * hover_f * (1.0 - sel_f)
+                        + acc.g() * sel_f,
+                    base.b() * (1.0 - hover_f - sel_f).max(0.0)
+                        + 1.0 * hover_f * (1.0 - sel_f)
+                        + acc.b() * sel_f,
+                    base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f,
+                )
+                .into();
                 
                 ui.painter().text(
                     rect.center(), 
                     egui::Align2::CENTER_CENTER, 
                     "⚙", 
                     egui::FontId::proportional(22.0), 
-                    gear_color
+                    gear_color,
                 );
                 
                 if resp.on_hover_text("Settings").clicked() {
@@ -406,28 +517,49 @@ impl OpenDavApp {
                 }
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new("v0.9.0-rs").color(egui::Color32::DARK_GRAY).small());
+                    ui.label(
+                        egui::RichText::new("v0.9.0-rs")
+                            .color(egui::Color32::DARK_GRAY)
+                            .small(),
+                    );
                 });
             });
         });
     }
 
     fn draw_graphs_sidebar_content(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let theme = AppTheme::for_mode(is_dark);
         ui.vertical(|ui| {
             ui.add_space(5.0);
-            if ui.button(egui::RichText::new("⬅  Back to OpenDAV").strong().color(ACCENT_COLOR)).clicked() {
+            if ui
+                .button(
+                    egui::RichText::new("⬅  Back to OpenDAV")
+                        .strong()
+                        .color(theme.accent_text),
+                )
+                .clicked()
+            {
                 self.active_page = ActivePage::OpenDav;
             }
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(10.0);
 
-            let select_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
-            ui.label(egui::RichText::new("LAP TIMELINE SELECT").color(select_hdr_color).size(10.0).strong());
+            let select_hdr_color = theme.text_secondary;
+            ui.label(
+                egui::RichText::new("LAP TIMELINE SELECT")
+                    .color(select_hdr_color)
+                    .size(10.0)
+                    .strong(),
+            );
             ui.add_space(8.0);
 
                             if self.sessions.is_empty() {
-                                ui.label(egui::RichText::new("No Session Active").color(egui::Color32::GRAY).small());
+                ui.label(
+                    egui::RichText::new("No Session Active")
+                        .color(theme.text_tertiary)
+                        .small(),
+                );
                             } else {
                                 let sidebar_style = ui.style_mut();
                                 sidebar_style.spacing.button_padding = egui::vec2(12.0, 8.0);
@@ -444,8 +576,16 @@ impl OpenDavApp {
                                     ui.vertical(|ui| {
                                         for (s_idx, loaded_session) in self.sessions.iter().enumerate() {
                                             let is_primary = self.primary_session_idx == s_idx;
-                                            let header_color = if is_primary { ACCENT_COLOR } else { if is_dark { egui::Color32::from_rgb(40,40,40) } else { egui::Color32::from_rgb(210,210,210) } };
-                                            let text_color = if is_primary { egui::Color32::BLACK } else { if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK } };
+                            let header_color = if is_primary {
+                                theme.accent
+                            } else {
+                                theme.surface_elevated
+                            };
+                            let text_color = if is_primary {
+                                theme.on_accent
+                            } else {
+                                theme.text_primary
+                            };
 
                                             let mut local_remove = false;
                                             let header_btn = egui::Frame::none()
@@ -459,16 +599,32 @@ impl OpenDavApp {
                                                         } else {
                                                             loaded_session.file_name.clone()
                                                         };
-                                                        let btn = ui.selectable_label(is_primary, egui::RichText::new(&display_name).color(text_color).strong())
+                                        let btn = ui
+                                            .selectable_label(
+                                                is_primary,
+                                                egui::RichText::new(&display_name)
+                                                    .color(text_color)
+                                                    .strong(),
+                                            )
                                                             .on_hover_text(&loaded_session.file_name);
-                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                            if ui.button(egui::RichText::new("🗑").color(text_color)).clicked() {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .button(
+                                                        egui::RichText::new("🗑").color(text_color),
+                                                    )
+                                                    .clicked()
+                                                {
                                                                 local_remove = true;
                                                             }
-                                                        });
+                                            },
+                                        );
                                                         btn
-                                                    }).inner
-                                                }).inner;
+                                    })
+                                    .inner
+                                })
+                                .inner;
 
                                             if local_remove {
                                                 session_to_remove = Some(s_idx);
@@ -482,37 +638,53 @@ impl OpenDavApp {
                                             let fastest_lap = get_fastest_lap(lap_times);
 
                                             egui::Frame::none()
-                                                .stroke(egui::Stroke::new(1.0, if is_dark { egui::Color32::from_rgb(50,50,50) } else { egui::Color32::from_rgb(200,200,200) }))
+                                .stroke(egui::Stroke::new(1.0, theme.border_subtle))
                                                 .corner_radius(4.0)
                                                 .inner_margin(egui::Margin::symmetric(6, 4))
                                                 .show(ui, |ui| {
                                                 for (lap_num, duration) in lap_times {
-                                                    let is_selected = self.selected_lap == Some((s_idx, *lap_num));
+                                        let is_selected =
+                                            self.selected_lap == Some((s_idx, *lap_num));
                                                     let is_fastest = *lap_num == fastest_lap && *lap_num > 0;
 
                                                     let is_cyan = self.ref_lap_cyan == Some((s_idx, *lap_num));
-                                                    let is_white = self.ref_lap_white == Some((s_idx, *lap_num));
+                                        let is_white =
+                                            self.ref_lap_white == Some((s_idx, *lap_num));
 
                                                     let label_color = if is_selected {
-                                                        ACCENT_COLOR
+                                            theme.accent_text
                                                     } else if is_fastest {
-                                                        SUB_ACCENT_COLOR
+                                            theme.brand_secondary
                                                     } else {
-                                                        if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }
+                                            theme.text_primary
                                                     };
 
                                                     ui.horizontal(|ui| {
                                                         // 1. Cyan Reference Toggle Box (Left)
-                                                        let active_cyan = if is_dark { egui::Color32::from_rgb(0, 255, 255) } else { egui::Color32::from_rgb(0, 136, 170) };
-                                                        let border_color_c = if is_cyan { active_cyan } else { egui::Color32::TRANSPARENT };
+                                            let active_cyan = theme.reference_primary;
+                                            let border_color_c = if is_cyan {
+                                                active_cyan
+                                            } else {
+                                                egui::Color32::TRANSPARENT
+                                            };
                                                         
                                                         let btn_c = egui::Frame::none()
                                                             .stroke(egui::Stroke::new(1.0, border_color_c))
                                                             .corner_radius(4.0)
                                                             .inner_margin(egui::Margin::symmetric(4, 2))
                                                             .show(ui, |ui| {
-                                                                ui.selectable_label(false, egui::RichText::new("C").color(if is_cyan { active_cyan } else { egui::Color32::DARK_GRAY }).strong())
-                                                            }).inner;
+                                                    ui.selectable_label(
+                                                        false,
+                                                        egui::RichText::new("C")
+                                                            .color(if is_cyan {
+                                                                active_cyan
+                                                            } else {
+                                                                theme.text_disabled
+                                                            })
+                                                            .strong(),
+                                                    )
+                                                })
+                                                .inner;
                                                         
                                                         if btn_c.clicked() {
                                                             if is_cyan {
@@ -523,16 +695,30 @@ impl OpenDavApp {
                                                         }
 
                                                         // 2. White Reference Toggle Box (Right)
-                                                        let active_white = if is_dark { egui::Color32::WHITE } else { egui::Color32::from_rgb(40, 40, 40) };
-                                                        let border_color_w = if is_white { active_white } else { egui::Color32::TRANSPARENT };
+                                            let active_white = theme.reference_secondary;
+                                            let border_color_w = if is_white {
+                                                active_white
+                                            } else {
+                                                egui::Color32::TRANSPARENT
+                                            };
                                                         
                                                         let btn_w = egui::Frame::none()
                                                             .stroke(egui::Stroke::new(1.0, border_color_w))
                                                             .corner_radius(4.0)
                                                             .inner_margin(egui::Margin::symmetric(4, 2))
                                                             .show(ui, |ui| {
-                                                                ui.selectable_label(false, egui::RichText::new("W").color(if is_white { active_white } else { egui::Color32::DARK_GRAY }).strong())
-                                                            }).inner;
+                                                    ui.selectable_label(
+                                                        false,
+                                                        egui::RichText::new("S")
+                                                            .color(if is_white {
+                                                                active_white
+                                                            } else {
+                                                                theme.text_disabled
+                                                            })
+                                                            .strong(),
+                                                    )
+                                                })
+                                                .inner;
                                                         
                                                         if btn_w.clicked() {
                                                             if is_white {
@@ -543,20 +729,34 @@ impl OpenDavApp {
                                                         }
 
                                                         // 3. Main Lap Timeline Selection Selector
-                                                        let mut text = format!("Lap {} : {}", lap_num, format_lap_time(*duration));
+                                            let mut text = format!(
+                                                "Lap {} : {}",
+                                                lap_num,
+                                                format_lap_time(*duration)
+                                            );
                                                         if is_fastest {
                                                             text += " ★";
                                                         }
 
-                                                        let border_color_l = if is_selected { ACCENT_COLOR } else { egui::Color32::TRANSPARENT };
+                                            let border_color_l = if is_selected {
+                                                theme.accent
+                                            } else {
+                                                egui::Color32::TRANSPARENT
+                                            };
                                                         
                                                         let btn_l = egui::Frame::none()
                                                             .stroke(egui::Stroke::new(1.0, border_color_l))
                                                             .corner_radius(4.0)
                                                             .inner_margin(egui::Margin::symmetric(6, 3))
                                                             .show(ui, |ui| {
-                                                                ui.selectable_label(false, egui::RichText::new(text).color(label_color).strong())
-                                                            }).inner;
+                                                    ui.selectable_label(
+                                                        false,
+                                                        egui::RichText::new(text)
+                                                            .color(label_color)
+                                                            .strong(),
+                                                    )
+                                                })
+                                                .inner;
 
                                                         if btn_l.clicked() {
                                                             new_selected_lap = Some((s_idx, *lap_num));
@@ -586,7 +786,7 @@ impl OpenDavApp {
                                             self.primary_session_idx -= 1;
                                         }
                                         
-                                        let mut handle_ref_lap = |r: &mut Option<(usize, i32)>| {
+                        let handle_ref_lap = |r: &mut Option<(usize, i32)>| {
                                             if let Some((s_idx, lap)) = *r {
                                                 if s_idx == idx {
                                                     *r = None;
@@ -630,8 +830,15 @@ impl OpenDavApp {
                                     state_changed = true;
                                 }
                                 if let Some(sl) = new_selected_lap {
+                    if self.primary_session_idx != sl.0 {
+                        self.primary_session_idx = sl.0;
+                    }
                                     self.selected_lap = Some(sl);
-                                    if let Some(pos) = self.sessions[sl.0].lap_ranges.iter().position(|r| r.0 == sl.1) {
+                    if let Some(pos) = self.sessions[sl.0]
+                        .lap_ranges
+                        .iter()
+                        .position(|r| r.0 == sl.1)
+                    {
                                         let (_, start_t, _end_t) = self.sessions[sl.0].lap_ranges[pos];
                                         self.cursor_x = Some(start_t);
                                         self.reset_bounds_flag = true;
@@ -643,6 +850,7 @@ impl OpenDavApp {
                                 }
                                 if state_changed && !self.sessions.is_empty() {
                                     self.update_sector_deltas();
+                    self.update_lap_deltas();
                                 }
                             }
                         });
@@ -652,25 +860,33 @@ impl OpenDavApp {
                     ui.horizontal(|ui| {
                         let is_settings = self.active_page == ActivePage::Settings;
                         
-                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
                         let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
                         let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_settings);
                         
                         let base = egui::Rgba::from(egui::Color32::GRAY);
                         let acc = egui::Rgba::from(ACCENT_COLOR);
                         let gear_color = egui::Rgba::from_rgba_premultiplied(
-                            base.r() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.r() * sel_f,
-                            base.g() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.g() * sel_f,
-                            base.b() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.b() * sel_f,
-                            base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f
-                        ).into();
+                    base.r() * (1.0 - hover_f - sel_f).max(0.0)
+                        + 1.0 * hover_f * (1.0 - sel_f)
+                        + acc.r() * sel_f,
+                    base.g() * (1.0 - hover_f - sel_f).max(0.0)
+                        + 1.0 * hover_f * (1.0 - sel_f)
+                        + acc.g() * sel_f,
+                    base.b() * (1.0 - hover_f - sel_f).max(0.0)
+                        + 1.0 * hover_f * (1.0 - sel_f)
+                        + acc.b() * sel_f,
+                    base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f,
+                )
+                .into();
                         
                         ui.painter().text(
                             rect.center(), 
                             egui::Align2::CENTER_CENTER, 
                             "⚙", 
                             egui::FontId::proportional(22.0), 
-                            gear_color
+                    gear_color,
                         );
                         
                         if resp.on_hover_text("Settings").clicked() {
@@ -678,38 +894,63 @@ impl OpenDavApp {
                         }
                         
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(egui::RichText::new("v0.9.0-rs").color(egui::Color32::DARK_GRAY).small());
+                    ui.label(
+                        egui::RichText::new("v0.9.0-rs")
+                            .color(egui::Color32::DARK_GRAY)
+                            .small(),
+                    );
                         });
                     });
                 });
     }
 
     fn draw_values_sidebar_content(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let theme = AppTheme::for_mode(is_dark);
         ui.vertical(|ui| {
             ui.add_space(5.0);
-            if ui.button(egui::RichText::new("⬅  Back to OpenDAV").strong().color(ACCENT_COLOR)).clicked() {
+            if ui
+                .button(
+                    egui::RichText::new("⬅  Back to OpenDAV")
+                        .strong()
+                        .color(theme.accent_text),
+                )
+                .clicked()
+            {
                 self.active_page = ActivePage::OpenDav;
             }
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(8.0);
 
-            let select_hdr_color = if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY };
-            ui.label(egui::RichText::new("LIVE TELEMETRY VALUES").color(select_hdr_color).size(10.0).strong());
+            let select_hdr_color = theme.text_secondary;
+            ui.label(
+                egui::RichText::new("LIVE TELEMETRY VALUES")
+                    .color(select_hdr_color)
+                    .size(10.0)
+                    .strong(),
+            );
             ui.add_space(6.0);
 
             // Channel Search Bar
             ui.add(
                 egui::TextEdit::singleline(&mut self.channel_search_query)
                     .hint_text("🔍 Search channels...")
-                    .desired_width(ui.available_width())
+                    .desired_width(ui.available_width()),
             );
             ui.add_space(8.0);
 
             if !self.session_loaded || self.sessions.is_empty() {
                 ui.add_space(10.0);
-                ui.label(egui::RichText::new("No Telemetry Session Active").color(egui::Color32::GRAY).small());
-                ui.label(egui::RichText::new("Load an IBT file to inspect live channel values.").color(egui::Color32::GRAY).small());
+                ui.label(
+                    egui::RichText::new("No Telemetry Session Active")
+                        .color(theme.text_tertiary)
+                        .small(),
+                );
+                ui.label(
+                    egui::RichText::new("Load an IBT file to inspect live channel values.")
+                        .color(theme.text_tertiary)
+                        .small(),
+                );
             } else {
                 let p_idx = self.primary_session_idx;
                 let session = &self.sessions[p_idx].session;
@@ -722,41 +963,98 @@ impl OpenDavApp {
                             Ok(slice) => crate::signals::processing::get_closest_index(slice, cx),
                             Err(_) => 0,
                         }
-                    } else { 0 }
-                } else { 0 };
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
 
                 let query_lower = self.channel_search_query.to_lowercase();
 
-                let mut channel_names: Vec<String> = df.get_column_names()
+                let mut channel_names: Vec<String> = df
+                    .get_column_names()
                     .into_iter()
                     .map(|s| s.to_string())
-                    .filter(|name| query_lower.is_empty() || name.to_lowercase().contains(&query_lower))
+                    .filter(|name| {
+                        query_lower.is_empty() || name.to_lowercase().contains(&query_lower)
+                    })
                     .collect();
-                channel_names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                channel_names.sort_by_key(|name| name.to_lowercase());
 
                 let total_cols = df.width();
                 let filtered_count = channel_names.len();
 
-                ui.label(egui::RichText::new(format!("Showing {} of {} channels", filtered_count, total_cols)).color(egui::Color32::GRAY).small());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Showing {} of {} channels",
+                        filtered_count, total_cols
+                    ))
+                    .color(theme.text_tertiary)
+                    .small(),
+                );
+                if filtered_count == 0 {
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new("No matching channels").color(theme.text_secondary),
+                    );
+                    if ui.small_button("Clear search").clicked() {
+                        self.channel_search_query.clear();
+                    }
+                }
                 let use_metric = self.settings.use_metric;
                 let empty_unit = String::new();
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.vertical(|ui| {
                         for col_name in channel_names {
-                            let raw_unit = session.channel_units.get(&col_name).unwrap_or(&empty_unit);
+                            let raw_unit =
+                                session.channel_units.get(&col_name).unwrap_or(&empty_unit);
 
                             if let Ok(col) = df.column(&col_name) {
                                 let (val_str, unit_display) = if row_idx < col.len() {
                                     match col.get(row_idx) {
-                                        Ok(polars::prelude::AnyValue::Float64(f)) => format_channel_unit_val(&col_name, f, raw_unit, use_metric),
-                                        Ok(polars::prelude::AnyValue::Float32(f)) => format_channel_unit_val(&col_name, f as f64, raw_unit, use_metric),
-                                        Ok(polars::prelude::AnyValue::Int64(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
-                                        Ok(polars::prelude::AnyValue::Int32(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
-                                        Ok(polars::prelude::AnyValue::Int16(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
-                                        Ok(polars::prelude::AnyValue::Int8(i)) => format_channel_unit_val(&col_name, i as f64, raw_unit, use_metric),
-                                        Ok(polars::prelude::AnyValue::Boolean(b)) => (if b { "true".to_string() } else { "false".to_string() }, raw_unit.to_string()),
-                                        Ok(polars::prelude::AnyValue::String(s)) => (s.to_string(), raw_unit.to_string()),
+                                        Ok(polars::prelude::AnyValue::Float64(f)) => {
+                                            format_channel_unit_val(
+                                                &col_name, f, raw_unit, use_metric,
+                                            )
+                                        }
+                                        Ok(polars::prelude::AnyValue::Float32(f)) => {
+                                            format_channel_unit_val(
+                                                &col_name, f as f64, raw_unit, use_metric,
+                                            )
+                                        }
+                                        Ok(polars::prelude::AnyValue::Int64(i)) => {
+                                            format_channel_unit_val(
+                                                &col_name, i as f64, raw_unit, use_metric,
+                                            )
+                                        }
+                                        Ok(polars::prelude::AnyValue::Int32(i)) => {
+                                            format_channel_unit_val(
+                                                &col_name, i as f64, raw_unit, use_metric,
+                                            )
+                                        }
+                                        Ok(polars::prelude::AnyValue::Int16(i)) => {
+                                            format_channel_unit_val(
+                                                &col_name, i as f64, raw_unit, use_metric,
+                                            )
+                                        }
+                                        Ok(polars::prelude::AnyValue::Int8(i)) => {
+                                            format_channel_unit_val(
+                                                &col_name, i as f64, raw_unit, use_metric,
+                                            )
+                                        }
+                                        Ok(polars::prelude::AnyValue::Boolean(b)) => (
+                                            if b {
+                                                "true".to_string()
+                                            } else {
+                                                "false".to_string()
+                                            },
+                                            raw_unit.to_string(),
+                                        ),
+                                        Ok(polars::prelude::AnyValue::String(s)) => {
+                                            (s.to_string(), raw_unit.to_string())
+                                        }
                                         Ok(other) => (format!("{:?}", other), raw_unit.to_string()),
                                         Err(_) => ("N/A".to_string(), raw_unit.to_string()),
                                     }
@@ -765,23 +1063,43 @@ impl OpenDavApp {
                                 };
 
                                 egui::Frame::none()
-                                    .fill(if is_dark { egui::Color32::from_rgb(26, 28, 34) } else { egui::Color32::from_rgb(238, 240, 244) })
+                                    .fill(theme.surface_card)
+                                    .stroke(egui::Stroke::new(1.0, theme.border_subtle))
                                     .corner_radius(4.0)
                                     .inner_margin(egui::Margin::symmetric(8, 5))
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new(&col_name).small().strong().color(if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK }));
+                                            let name = ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(&col_name)
+                                                        .small()
+                                                        .strong()
+                                                        .color(theme.text_primary),
+                                                )
+                                                .truncate(),
+                                            );
+                                            name.on_hover_text(&col_name);
                                             if !unit_display.is_empty() {
-                                                ui.label(egui::RichText::new(format!("[{}]", unit_display)).size(9.0).color(egui::Color32::GRAY));
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "[{}]",
+                                                        unit_display
+                                                    ))
+                                                    .size(9.0)
+                                                    .color(theme.text_tertiary),
+                                                );
                                             }
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                let display_text = if !unit_display.is_empty() {
-                                                    format!("{} {}", val_str, unit_display)
-                                                } else {
-                                                    val_str
-                                                };
-                                                ui.label(egui::RichText::new(display_text).small().strong().color(ACCENT_COLOR));
-                                            });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(val_str)
+                                                            .small()
+                                                            .strong()
+                                                            .color(theme.accent_text),
+                                                    );
+                                                },
+                                            );
                                         });
                                     });
                                 ui.add_space(3.0);
@@ -795,24 +1113,34 @@ impl OpenDavApp {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     let is_settings = self.active_page == ActivePage::Settings;
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
                     let hover_f = ui.ctx().animate_bool(resp.id.with("hover"), resp.hovered());
                     let sel_f = ui.ctx().animate_bool(resp.id.with("sel"), is_settings);
                     let acc = egui::Rgba::from(ACCENT_COLOR);
-                    let base = egui::Rgba::from(egui::Color32::DARK_GRAY);
+                    let base = egui::Rgba::from(theme.text_tertiary);
                     let gear_color: egui::Color32 = egui::Rgba::from_rgba_premultiplied(
-                        base.r() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.r() * sel_f,
-                        base.g() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.g() * sel_f,
-                        base.b() * (1.0 - hover_f - sel_f).max(0.0) + 1.0 * hover_f * (1.0 - sel_f) + acc.b() * sel_f,
-                        base.a() * (1.0 - hover_f - sel_f).max(0.0) + hover_f * (1.0 - sel_f) + sel_f
-                    ).into();
+                        base.r() * (1.0 - hover_f - sel_f).max(0.0)
+                            + 1.0 * hover_f * (1.0 - sel_f)
+                            + acc.r() * sel_f,
+                        base.g() * (1.0 - hover_f - sel_f).max(0.0)
+                            + 1.0 * hover_f * (1.0 - sel_f)
+                            + acc.g() * sel_f,
+                        base.b() * (1.0 - hover_f - sel_f).max(0.0)
+                            + 1.0 * hover_f * (1.0 - sel_f)
+                            + acc.b() * sel_f,
+                        base.a() * (1.0 - hover_f - sel_f).max(0.0)
+                            + hover_f * (1.0 - sel_f)
+                            + sel_f,
+                    )
+                    .into();
                     
                     ui.painter().text(
                         rect.center(), 
                         egui::Align2::CENTER_CENTER, 
                         "⚙", 
                         egui::FontId::proportional(22.0), 
-                        gear_color
+                        gear_color,
                     );
                     
                     if resp.on_hover_text("Settings").clicked() {
@@ -820,7 +1148,11 @@ impl OpenDavApp {
                     }
                     
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("v0.9.0-rs").color(egui::Color32::DARK_GRAY).small());
+                        ui.label(
+                            egui::RichText::new("v0.9.0-rs")
+                                .color(egui::Color32::DARK_GRAY)
+                                .small(),
+                        );
                     });
                 });
             });
@@ -829,6 +1161,7 @@ impl OpenDavApp {
 
     pub fn draw_top_panel(&mut self, ctx: &egui::Context) {
         let is_dark = ctx.style().visuals.dark_mode;
+        let theme = AppTheme::for_mode(is_dark);
         
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.add_space(6.0);
@@ -863,7 +1196,11 @@ impl OpenDavApp {
                                 let _ = writeln!(file, "# Air Temp: {}", session.air_temp);
                                 let _ = writeln!(file, "# Surface Temp: {}", session.surface_temp);
                                 let _ = writeln!(file, "# Timestamp: {}", session.timestamp);
-                                let _ = writeln!(file, "# Total Time: {:.3}s", session.total_session_time);
+                                let _ = writeln!(
+                                    file,
+                                    "# Total Time: {:.3}s",
+                                    session.total_session_time
+                                );
                                 let _ = writeln!(file, "# Laps: {}", session.lap_times.len());
                                 
                                 use polars::prelude::SerWriter;
@@ -885,12 +1222,20 @@ impl OpenDavApp {
                     };
                     
                     if self.sessions.len() == 1 {
-                        ui.label(egui::RichText::new(format!("File: {}", display_name)).color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small())
+                        ui.label(
+                            egui::RichText::new(format!("File: {}", display_name))
+                                .color(theme.text_secondary)
+                                .small(),
+                        )
                             .on_hover_text(primary_file_name);
                     } else {
                         let mut new_primary = None;
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Primary File:").color(if is_dark { egui::Color32::LIGHT_GRAY } else { egui::Color32::DARK_GRAY }).small());
+                            ui.label(
+                                egui::RichText::new("Primary File:")
+                                    .color(theme.text_secondary)
+                                    .small(),
+                            );
                             egui::ComboBox::from_id_source("top_primary_session_dropdown")
                                 .selected_text(egui::RichText::new(display_name).small())
                                 .show_ui(ui, |ui| {
@@ -900,7 +1245,14 @@ impl OpenDavApp {
                                         } else {
                                             session.file_name.clone()
                                         };
-                                        if ui.selectable_label(self.primary_session_idx == idx, &s_display_name).on_hover_text(&session.file_name).clicked() {
+                                        if ui
+                                            .selectable_label(
+                                                self.primary_session_idx == idx,
+                                                &s_display_name,
+                                            )
+                                            .on_hover_text(&session.file_name)
+                                            .clicked()
+                                        {
                                             new_primary = Some(idx);
                                         }
                                     }
@@ -909,7 +1261,12 @@ impl OpenDavApp {
                         
                         if let Some(idx) = new_primary {
                             self.primary_session_idx = idx;
+                            let fastest = get_fastest_lap(&self.sessions[idx].session.lap_times);
+                            self.selected_lap = (fastest > 0).then_some((idx, fastest));
                             self.update_sector_deltas();
+                            self.update_lap_deltas();
+                            self.reset_bounds_flag = true;
+                            self.reset_bounds_next_frame = 3;
                             self.reset_track_map_bounds_flag = true;
                             self.reset_track_map_bounds_next_frame = 3;
                         }
@@ -917,23 +1274,35 @@ impl OpenDavApp {
 
                     // --- TELEMETRY PLAYBACK CONTROLS (TOP PANEL NEXT TO FILE DETAILS) ---
                     ui.separator();
-                    let play_icon = if self.is_playing { "⏸ Pause" } else { "▶ Play" };
-                    let play_color = if self.is_playing { egui::Color32::from_rgb(220, 70, 70) } else { ACCENT_COLOR };
+                    let play_icon = if self.is_playing {
+                        "⏸ Pause"
+                    } else {
+                        "▶ Play"
+                    };
+                    let play_color = if self.is_playing {
+                        theme.danger
+                    } else {
+                        theme.accent_text
+                    };
                     
-                    let play_btn = ui.add(
-                        egui::Button::new(egui::RichText::new(play_icon).strong().color(play_color).size(12.0))
-                    );
+                    let play_btn = ui.add(egui::Button::new(
+                        egui::RichText::new(play_icon)
+                            .strong()
+                            .color(play_color)
+                            .size(12.0),
+                    ));
                     if play_btn.clicked() {
-                        if !self.is_playing && !self.sessions.is_empty() && self.selected_lap.is_some() {
-                            self.is_playing = true;
-                        } else {
-                            self.is_playing = false;
-                        }
+                        self.is_playing = !self.is_playing
+                            && !self.sessions.is_empty()
+                            && self.selected_lap.is_some();
                     }
 
                     let mut speed_text = "1.0x";
-                    if self.playback_speed == 0.5 { speed_text = "0.5x"; }
-                    else if self.playback_speed == 2.0 { speed_text = "2.0x"; }
+                    if self.playback_speed == 0.5 {
+                        speed_text = "0.5x";
+                    } else if self.playback_speed == 2.0 {
+                        speed_text = "2.0x";
+                    }
                     
                     egui::ComboBox::from_id_source("top_playback_speed")
                         .selected_text(egui::RichText::new(speed_text).size(12.0))
@@ -955,8 +1324,16 @@ impl OpenDavApp {
                         }
                         ui.separator();
                     }
-                    let theme_icon = if self.settings.dark_mode { "🌙" } else { "☀️" };
-                    if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
+                    let theme_icon = if self.settings.dark_mode {
+                        "🌙"
+                    } else {
+                        "☀️"
+                    };
+                    if ui
+                        .button(theme_icon)
+                        .on_hover_text("Toggle Theme")
+                        .clicked()
+                    {
                         self.settings.dark_mode = !self.settings.dark_mode;
                         self.settings.save();
                     }
@@ -967,7 +1344,12 @@ impl OpenDavApp {
     }
 }
 
-fn format_channel_unit_val(name: &str, raw_val: f64, raw_unit: &str, use_metric: bool) -> (String, String) {
+fn format_channel_unit_val(
+    name: &str,
+    raw_val: f64,
+    raw_unit: &str,
+    use_metric: bool,
+) -> (String, String) {
     let u_clean = raw_unit.trim();
     let u_lower = u_clean.to_lowercase();
     let name_lower = name.to_lowercase();
@@ -980,7 +1362,12 @@ fn format_channel_unit_val(name: &str, raw_val: f64, raw_unit: &str, use_metric:
             let mph = raw_val * 2.23694;
             (format!("{:.1}", mph), "mph".to_string())
         }
-    } else if u_lower.contains('c') && (u_lower.contains("deg") || u_lower.contains('°') || u_clean == "C" || name_lower.contains("temp")) {
+    } else if u_lower.contains('c')
+        && (u_lower.contains("deg")
+            || u_lower.contains('°')
+            || u_clean == "C"
+            || name_lower.contains("temp"))
+    {
         if use_metric {
             (format!("{:.1}", raw_val), "°C".to_string())
         } else {
@@ -1002,7 +1389,12 @@ fn format_channel_unit_val(name: &str, raw_val: f64, raw_unit: &str, use_metric:
             };
             (format!("{:.1}", psi), "psi".to_string())
         }
-    } else if u_lower == "mm" || (u_lower == "m" && (name_lower.contains("height") || name_lower.contains("rake") || name_lower.contains("dist"))) {
+    } else if u_lower == "mm"
+        || (u_lower == "m"
+            && (name_lower.contains("height")
+                || name_lower.contains("rake")
+                || name_lower.contains("dist")))
+    {
         if use_metric {
             if u_lower == "m" {
                 (format!("{:.1}", raw_val), "m".to_string())
@@ -1023,7 +1415,11 @@ fn format_channel_unit_val(name: &str, raw_val: f64, raw_unit: &str, use_metric:
         let unit_str = if u_lower.contains("/s") { "°/s" } else { "°" };
         (format!("{:.1}", deg), unit_str.to_string())
     } else if u_lower == "%" || u_clean == "%" {
-        let val_pct = if raw_val <= 1.0 && raw_val >= 0.0 { raw_val * 100.0 } else { raw_val };
+        let val_pct = if (0.0..=1.0).contains(&raw_val) {
+            raw_val * 100.0
+        } else {
+            raw_val
+        };
         (format!("{:.1}", val_pct), "%".to_string())
     } else {
         let fmt = if raw_val.fract() == 0.0 {
