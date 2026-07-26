@@ -879,8 +879,7 @@ impl OpenDavApp {
                             plot_ui.line(
                                 Line::new(format!("SecondaryRef_{}", trace.name), points)
                                     .color(theme.reference_secondary)
-                                    .style(egui_plot::LineStyle::Dashed { length: 8.0 })
-                                    .width(1.7),
+                                    .width(1.5),
                             );
                         }
                     }

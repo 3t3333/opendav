@@ -253,7 +253,8 @@ impl OpenDavApp {
                 });
 
             // B. Collapsible Drawer Panel
-            let narrow_workspace = ctx.content_rect().width() < 1180.0;
+            let window_width = ctx.screen_rect().width();
+            let narrow_workspace = window_width < 1280.0;
             if let Some(tab) =
                 active_tab.filter(|_| !self.show_graphs_track_map || !narrow_workspace)
             {
@@ -276,12 +277,8 @@ impl OpenDavApp {
             if self.show_graphs_track_map {
                 egui::SidePanel::left("graphs_track_map_panel")
                     .resizable(true)
-                    .default_width(if narrow_workspace { 380.0 } else { 480.0 })
-                    .width_range(if narrow_workspace {
-                        300.0..=560.0
-                            } else {
-                        320.0..=820.0
-                            })
+                    .default_width(380.0)
+                    .width_range(260.0..=820.0)
                     .frame(
                         egui::Frame::none()
                             .fill(theme.surface_panel)
