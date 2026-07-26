@@ -188,31 +188,47 @@ impl OpenDavApp {
 
         // Let's get the reference overlay laps if selected
         let ref_cyan_lap = self.ref_lap_cyan.and_then(|(s_idx, num)| {
-            self.sessions[s_idx]
-                .lap_data_cache
-                .iter()
-                .find(|l| l.lap_num == num)
+            if s_idx < self.sessions.len() {
+                self.sessions[s_idx]
+                    .lap_data_cache
+                    .iter()
+                    .find(|l| l.lap_num == num)
+            } else {
+                None
+            }
         });
         let ref_white_lap = self.ref_lap_white.and_then(|(s_idx, num)| {
-            self.sessions[s_idx]
-                .lap_data_cache
-                .iter()
-                .find(|l| l.lap_num == num)
+            if s_idx < self.sessions.len() {
+                self.sessions[s_idx]
+                    .lap_data_cache
+                    .iter()
+                    .find(|l| l.lap_num == num)
+            } else {
+                None
+            }
         });
         
         let primary_origin = loaded.map_origin.unwrap_or([0.0, 0.0]);
         let cyan_offset = self
             .ref_lap_cyan
-            .map(|(s_idx, _)| {
-            let o = self.sessions[s_idx].map_origin.unwrap_or([0.0, 0.0]);
-                [o[0] - primary_origin[0], o[1] - primary_origin[1]]
+            .and_then(|(s_idx, _)| {
+                if s_idx < self.sessions.len() {
+                    let o = self.sessions[s_idx].map_origin.unwrap_or([0.0, 0.0]);
+                    Some([o[0] - primary_origin[0], o[1] - primary_origin[1]])
+                } else {
+                    None
+                }
             })
             .unwrap_or([0.0, 0.0]);
         let white_offset = self
             .ref_lap_white
-            .map(|(s_idx, _)| {
-            let o = self.sessions[s_idx].map_origin.unwrap_or([0.0, 0.0]);
-                [o[0] - primary_origin[0], o[1] - primary_origin[1]]
+            .and_then(|(s_idx, _)| {
+                if s_idx < self.sessions.len() {
+                    let o = self.sessions[s_idx].map_origin.unwrap_or([0.0, 0.0]);
+                    Some([o[0] - primary_origin[0], o[1] - primary_origin[1]])
+                } else {
+                    None
+                }
             })
             .unwrap_or([0.0, 0.0]);
         
@@ -231,6 +247,8 @@ impl OpenDavApp {
             };
             let plot_width = ui.available_width() - control_rail_width - 10.0;
             ui.allocate_ui(egui::vec2(control_rail_width, height), |ui| {
+                ui.set_max_width(control_rail_width);
+                ui.style_mut().spacing.slider_width = (control_rail_width - 55.0).clamp(30.0, 80.0);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {

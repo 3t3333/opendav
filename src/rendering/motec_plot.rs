@@ -790,14 +790,6 @@ impl OpenDavApp {
                         .color(div_color)
                         .width(1.0),
                 );
-                plot_ui.text(Text::new(
-                    format!("LaneLabel_{}", lane.title),
-                    PlotPoint::new(min_visible_x + visible_width * 0.01, lane.y_max - 1.0),
-                    egui::RichText::new(lane.title)
-                        .color(theme.text_tertiary)
-                        .size(10.0)
-                        .strong(),
-                ));
             }
 
             // D. DRAW TICKER TIMELINE TRACK
