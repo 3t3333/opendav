@@ -1,6 +1,6 @@
 [package]
 name = "opendav_rs"
-version = "0.9.0-rs"
+version = "1.1.0-rs"
 edition = "2021"
 authors = ["Arturo <arturo@opendav.com>"]
 description = "High-performance virtual race engineering & telemetry workspace for iRacing"

@@ -128,12 +128,12 @@ impl OpenDavApp {
                 if ref_active {
                     ui.checkbox(
                         &mut self.show_sector_deltas,
-                        egui::RichText::new("Sector Delta Overlays").strong(),
+                        egui::RichText::new("Sector Delta Overlays").strong().color(theme.text_primary),
                     );
                     ui.add_space(15.0);
                     ui.checkbox(
                         &mut self.show_chart_deltas,
-                        egui::RichText::new("Time Series Charts Deltas").strong(),
+                        egui::RichText::new("Time Series Charts Deltas").strong().color(theme.text_primary),
                     );
                 } else {
                     ui.add_enabled_ui(false, |ui| {
@@ -143,12 +143,13 @@ impl OpenDavApp {
                             egui::RichText::new(
                                 "Sector Delta Overlays (Select Reference Lap in Graphs)",
                             )
-                            .small(),
+                            .small()
+                            .color(theme.text_primary),
                         );
                         ui.add_space(15.0);
                         ui.checkbox(
                             &mut dummy,
-                            egui::RichText::new("Time Series Charts Deltas").small(),
+                            egui::RichText::new("Time Series Charts Deltas").small().color(theme.text_primary),
                         );
                     });
                 }
@@ -611,13 +612,13 @@ impl OpenDavApp {
                                     plot_ui.line(
                                         Line::new("", PlotPoints::from(seg_pts.clone()))
                                             .color(satellite_casing)
-                                            .width(4.5),
+                                            .width(3.825),
                                     );
                                 }
                                 plot_ui.line(
                                     Line::new("", PlotPoints::from(seg_pts))
                                         .color(color)
-                                        .width(2.0),
+                                        .width(1.7),
                                 );
                             }
                         }
@@ -649,14 +650,14 @@ impl OpenDavApp {
                                     plot_ui.line(
                                         Line::new("", PlotPoints::from(seg_pts.clone()))
                                             .color(satellite_casing)
-                                            .width(4.5),
+                                            .width(3.825),
                                     );
                                 }
                                 // Empty name because we render the labels manually below, AND we have the side panel legend!
                                 plot_ui.line(
                                     Line::new("", PlotPoints::from(seg_pts))
                                     .color(seg_color)
-                                        .width(2.0),
+                                        .width(1.7),
                                 );
                             }
                         }
@@ -668,13 +669,13 @@ impl OpenDavApp {
                                 plot_ui.line(
                                     Line::new("", PlotPoints::from(seg_pts.clone()))
                                         .color(satellite_casing)
-                                        .width(4.5),
+                                        .width(3.825),
                                 );
                             }
                             plot_ui.line(
                                 Line::new("", PlotPoints::from(seg_pts))
                                     .color(theme.accent)
-                                    .width(2.0),
+                                    .width(1.7),
                             );
                         }
                     }
@@ -843,13 +844,13 @@ impl OpenDavApp {
                                     plot_ui.points(
                                         Points::new("", vec![pr])
                                             .color(satellite_casing)
-                                            .radius(10.5),
+                                            .radius(7.875),
                                     );
                                 }
                                 plot_ui.points(
                                     Points::new("", vec![pr])
                                         .color(color)
-                                        .radius(8.0),
+                                        .radius(6.0),
                                 );
                             }
                         };
@@ -861,14 +862,15 @@ impl OpenDavApp {
                             plot_ui.points(
                                 Points::new("", vec![p_car])
                                     .color(satellite_casing)
-                                    .radius(10.5),
+                                    .radius(7.875),
                             );
                         }
                         plot_ui.points(
                             Points::new("", vec![p_car])
                                 .color(theme.accent)
-                                .radius(8.0),
+                                .radius(6.0),
                         );
+
 
                         if self.auto_follow_track_map && !reset_bounds_flag {
                             let bounds = plot_ui.plot_bounds();

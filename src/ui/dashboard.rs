@@ -440,40 +440,43 @@ impl OpenDavApp {
 
             ui.add_space(15.0);
 
-            let simgit_bytes = include_bytes!("../../assets/button_simgit.png");
-            let is_simgit_selected = self.active_page == ActivePage::SimGit;
-            let simgit =
-                egui::Image::from_bytes("bytes://button_simgit.png", simgit_bytes.to_vec())
-                    .max_width(240.0)
-                    .corner_radius(8.0)
-                    .sense(egui::Sense::click());
-            let response = ui.add(simgit).on_hover_text("SimGit workspaces");
-            let hover = ui
-                .ctx()
-                .animate_bool(response.id.with("hover"), response.hovered());
-            let selected = ui
-                .ctx()
-                .animate_bool(response.id.with("sel"), is_simgit_selected);
-            let stroke = if selected > 0.0 {
-                egui::Stroke::new(2.0, theme.accent)
-            } else if hover > 0.0 {
-                egui::Stroke::new(1.5, theme.border_strong)
-            } else {
-                egui::Stroke::NONE
-            };
-            if stroke != egui::Stroke::NONE {
-                ui.painter().rect_stroke(
-                    response.rect.expand(1.0),
-                    8.0,
-                    stroke,
-                    egui::StrokeKind::Inside,
-                );
-            }
-            if response.clicked() {
-                self.active_page = ActivePage::SimGit;
-            }
+            #[cfg(feature = "dev_tools")]
+            {
+                let simgit_bytes = include_bytes!("../../assets/button_simgit.png");
+                let is_simgit_selected = self.active_page == ActivePage::SimGit;
+                let simgit =
+                    egui::Image::from_bytes("bytes://button_simgit.png", simgit_bytes.to_vec())
+                        .max_width(240.0)
+                        .corner_radius(8.0)
+                        .sense(egui::Sense::click());
+                let response = ui.add(simgit).on_hover_text("SimGit workspaces");
+                let hover = ui
+                    .ctx()
+                    .animate_bool(response.id.with("hover"), response.hovered());
+                let selected = ui
+                    .ctx()
+                    .animate_bool(response.id.with("sel"), is_simgit_selected);
+                let stroke = if selected > 0.0 {
+                    egui::Stroke::new(2.0, theme.accent)
+                } else if hover > 0.0 {
+                    egui::Stroke::new(1.5, theme.border_strong)
+                } else {
+                    egui::Stroke::NONE
+                };
+                if stroke != egui::Stroke::NONE {
+                    ui.painter().rect_stroke(
+                        response.rect.expand(1.0),
+                        8.0,
+                        stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if response.clicked() {
+                    self.active_page = ActivePage::SimGit;
+                }
 
-            ui.add_space(15.0);
+                ui.add_space(15.0);
+            }
         });
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -515,7 +518,7 @@ impl OpenDavApp {
                 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new("v0.9.0-rs")
+                        egui::RichText::new("v1.1.0-rs")
                             .color(egui::Color32::DARK_GRAY)
                             .small(),
                     );
@@ -892,7 +895,7 @@ impl OpenDavApp {
                         
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new("v0.9.0-rs")
+                        egui::RichText::new("v1.1.0-rs")
                             .color(egui::Color32::DARK_GRAY)
                             .small(),
                     );
@@ -958,7 +961,10 @@ impl OpenDavApp {
                         let cx = self.cursor_x.unwrap_or(0.0);
                         match ca.cont_slice() {
                             Ok(slice) => crate::signals::processing::get_closest_index(slice, cx),
-                            Err(_) => 0,
+                            Err(_) => {
+                                let vec: Vec<f64> = ca.into_no_null_iter().collect();
+                                crate::signals::processing::get_closest_index(&vec, cx)
+                            }
                         }
                     } else {
                         0
@@ -1146,7 +1152,7 @@ impl OpenDavApp {
                     
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
-                            egui::RichText::new("v0.9.0-rs")
+                            egui::RichText::new("v1.1.0-rs")
                                 .color(egui::Color32::DARK_GRAY)
                                 .small(),
                         );
