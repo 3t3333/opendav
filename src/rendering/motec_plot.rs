@@ -849,12 +849,12 @@ impl OpenDavApp {
                             
             // F. DRAW PRECOMPUTED, DISTANCE-ALIGNED REFERENCE OVERLAYS
             if let Some(cache) = self.comparison_cyan.as_ref() {
-                            for lane in &lanes {
-                                for trace in &lane.traces {
+                for lane in &lanes {
+                    for trace in &lane.traces {
                         if let Some(channel) = cache.channel(trace.cache) {
                             let points = decimate_points(&channel.scaled_points);
                             plot_ui.line(
-                                Line::new(format!("CyanRef_{}", trace.name), points)
+                                Line::new("", points)
                                     .color(theme.reference_primary)
                                     .width(1.5),
                             );
@@ -864,12 +864,12 @@ impl OpenDavApp {
             }
 
             if let Some(cache) = self.comparison_secondary.as_ref() {
-                            for lane in &lanes {
-                                for trace in &lane.traces {
+                for lane in &lanes {
+                    for trace in &lane.traces {
                         if let Some(channel) = cache.channel(trace.cache) {
                             let points = decimate_points(&channel.scaled_points);
                             plot_ui.line(
-                                Line::new(format!("SecondaryRef_{}", trace.name), points)
+                                Line::new("", points)
                                     .color(theme.reference_secondary)
                                     .width(1.5),
                             );

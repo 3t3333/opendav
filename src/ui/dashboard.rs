@@ -275,9 +275,9 @@ impl OpenDavApp {
             }
 
             if self.show_graphs_track_map {
-                let map_panel_resp = egui::SidePanel::left("graphs_track_map_panel")
+                egui::SidePanel::left("graphs_track_map_panel")
                     .resizable(true)
-                    .default_width(self.graphs_track_map_width)
+                    .default_width(380.0)
                     .width_range(240.0..=820.0)
                     .frame(
                         egui::Frame::none()
@@ -292,15 +292,6 @@ impl OpenDavApp {
                             crate::rendering::track_map::TrackMapPlacement::GraphsSidebar,
                         );
                     });
-
-                let is_mouse_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-                let actual_w = map_panel_resp.response.rect.width();
-                if is_mouse_down && actual_w >= 240.0 && actual_w <= 820.0 {
-                    self.graphs_track_map_width = actual_w;
-                }
-                ctx.data_mut(|d| {
-                    d.insert_persisted(egui::Id::new("graphs_track_map_panel"), self.graphs_track_map_width);
-                });
             }
             return;
         }

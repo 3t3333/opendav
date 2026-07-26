@@ -2,6 +2,7 @@ use crate::config::theme::AppTheme;
 use crate::signals::processing::{
     get_fastest_lap, get_lap_coord_at_distance, get_lap_coord_at_time, get_lap_distance_at_time,
     get_lap_segments, get_magnified_lap_coord, get_magnified_lap_segments, get_sector_segments,
+    LapData,
 };
 use crate::OpenDavApp;
 use egui_plot::{Line, Plot, PlotPoint, PlotPoints, Points, Text};
@@ -32,6 +33,15 @@ impl TrackMapPlacement {
             Self::GraphsSidebar => "interactive_track_map_graphs_sidebar",
         }
     }
+}
+
+fn draw_reference_legend_row(ui: &mut egui::Ui, color: egui::Color32, label: String) {
+    ui.horizontal_wrapped(|ui| {
+        let (rect, _response) =
+            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 2.0, color);
+        ui.add(egui::Label::new(label).wrap());
+    });
 }
 
 impl OpenDavApp {
@@ -299,25 +309,18 @@ impl OpenDavApp {
                         ui.add_space(8.0);
                         
                         if let Some(lap) = ref_cyan_lap {
-                            ui.horizontal(|ui| {
-                                    let (rect, _response) = ui.allocate_exact_size(
-                                        egui::vec2(12.0, 12.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(rect, 2.0, theme.reference_primary);
-                                    ui.label(format!("Cyan Reference - Lap {}", lap.lap_num));
-                            });
+                            draw_reference_legend_row(
+                                ui,
+                                theme.reference_primary,
+                                format!("Cyan Reference - Lap {}", lap.lap_num),
+                            );
                         }
                         if let Some(lap) = ref_white_lap {
-                            ui.horizontal(|ui| {
-                                    let (rect, _response) = ui.allocate_exact_size(
-                                        egui::vec2(12.0, 12.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter()
-                                        .rect_filled(rect, 2.0, theme.reference_secondary);
-                                    ui.label(format!("Secondary Reference - Lap {}", lap.lap_num));
-                            });
+                            draw_reference_legend_row(
+                                ui,
+                                theme.reference_secondary,
+                                format!("Secondary Reference - Lap {}", lap.lap_num),
+                            );
                         }
                         
                         ui.horizontal(|ui| {
@@ -588,92 +591,40 @@ impl OpenDavApp {
                         }
                     }
 
-                    // 1. Draw Reference Laps (underneath)
-                    if let Some(lap) = ref_cyan_lap {
-                        let segments = if self.magnify_line_deltas {
-                            rotate_segments(
-                                get_magnified_lap_segments(
-                                    lap,
-                                    active_lap,
-                                    self.magnifier_multiplier,
-                                ),
-                                cyan_offset,
-                            )
-                        } else {
-                            rotate_segments(get_lap_segments(lap), cyan_offset)
-                        };
-                        for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
-                            if self.enable_satellite_map {
+                    // 1. Draw Reference Laps (underneath - using unified helper closure)
+                    let render_ref_lap_trace = |plot_ui: &mut egui_plot::PlotUi, ref_lap: Option<&LapData>, offset: [f64; 2], color: egui::Color32| {
+                        if let Some(lap) = ref_lap {
+                            let segments = if self.magnify_line_deltas {
+                                rotate_segments(
+                                    get_magnified_lap_segments(
+                                        lap,
+                                        active_lap,
+                                        self.magnifier_multiplier,
+                                    ),
+                                    offset,
+                                )
+                            } else {
+                                rotate_segments(get_lap_segments(lap), offset)
+                            };
+                            for (_seg_idx, seg_pts) in segments.into_iter().enumerate() {
+                                if self.enable_satellite_map {
+                                    plot_ui.line(
+                                        Line::new("", PlotPoints::from(seg_pts.clone()))
+                                            .color(satellite_casing)
+                                            .width(4.5),
+                                    );
+                                }
                                 plot_ui.line(
-                                    Line::new(
-                                        format!(
-                                            "Ref Lap {} (Cyan) - Casing {}",
-                                            self.ref_lap_cyan.unwrap().1,
-                                            seg_idx
-                                        ),
-                                        PlotPoints::from(seg_pts.clone()),
-                                    )
-                                    .color(satellite_casing)
-                                    .width(4.5),
+                                    Line::new("", PlotPoints::from(seg_pts))
+                                        .color(color)
+                                        .width(2.0),
                                 );
                             }
-                            plot_ui.line(
-                                Line::new(
-                                    format!(
-                                        "Ref Lap {} (Cyan) - Seg {}",
-                                        self.ref_lap_cyan.unwrap().1,
-                                        seg_idx
-                                    ),
-                                    PlotPoints::from(seg_pts),
-                                )
-                                .color(theme.reference_primary)
-                                .width(2.0),
-                            );
                         }
-                    }
+                    };
 
-                    if let Some(lap) = ref_white_lap {
-                        let segments = if self.magnify_line_deltas {
-                            rotate_segments(
-                                get_magnified_lap_segments(
-                                    lap,
-                                    active_lap,
-                                    self.magnifier_multiplier,
-                                ),
-                                white_offset,
-                            )
-                        } else {
-                            rotate_segments(get_lap_segments(lap), white_offset)
-                        };
-                        for (seg_idx, seg_pts) in segments.into_iter().enumerate() {
-                            if self.enable_satellite_map {
-                                plot_ui.line(
-                                    Line::new(
-                                        format!(
-                                            "Ref Lap {} (White) - Casing {}",
-                                            self.ref_lap_white.unwrap().1,
-                                            seg_idx
-                                        ),
-                                        PlotPoints::from(seg_pts.clone()),
-                                    )
-                                    .color(satellite_casing)
-                                    .width(4.5),
-                                );
-                            }
-                            plot_ui.line(
-                                Line::new(
-                                    format!(
-                                        "Ref Lap {} (White) - Seg {}",
-                                        self.ref_lap_white.unwrap().1,
-                                        seg_idx
-                                    ),
-                                    PlotPoints::from(seg_pts),
-                                )
-                                .color(theme.reference_secondary)
-                                .width(2.0),
-                            );
-                        }
-                    }
+                    render_ref_lap_trace(plot_ui, ref_cyan_lap, cyan_offset, theme.reference_primary);
+                    render_ref_lap_trace(plot_ui, ref_white_lap, white_offset, theme.reference_secondary);
 
                     // 2. Draw Active Lap (color-coded by sector if show_deltas is true)
                     if show_deltas {
@@ -857,104 +808,64 @@ impl OpenDavApp {
                         let (cx_x, cx_y) = get_lap_coord_at_time(active_lap, lap_rel_time);
                         let p_car = rotate_point(cx_x, cx_y);
                         
-                        if let Some(w_lap) = ref_white_lap {
-                            let (wx, wy) = if self.magnify_line_deltas {
-                                let ref_dist = get_lap_distance_at_time(w_lap, lap_rel_time);
-                                get_magnified_lap_coord(
-                                    w_lap,
-                                    active_lap,
-                                    ref_dist,
-                                    self.magnifier_multiplier,
-                                )
-                            } else {
-                                get_lap_coord_at_time(w_lap, lap_rel_time)
-                            };
-                            let pw = rotate_point(wx + white_offset[0], wy + white_offset[1]);
-                            
-                            // Rubber band
-                            if self.enable_satellite_map {
+                        let render_ref_car_dot = |plot_ui: &mut egui_plot::PlotUi, ref_lap: Option<&LapData>, offset: [f64; 2], color: egui::Color32, faint_color: egui::Color32| {
+                            if let Some(r_lap) = ref_lap {
+                                let (rx, ry) = if self.magnify_line_deltas {
+                                    let ref_dist = get_lap_distance_at_time(r_lap, lap_rel_time);
+                                    get_magnified_lap_coord(
+                                        r_lap,
+                                        active_lap,
+                                        ref_dist,
+                                        self.magnifier_multiplier,
+                                    )
+                                } else {
+                                    get_lap_coord_at_time(r_lap, lap_rel_time)
+                                };
+                                let pr = rotate_point(rx + offset[0], ry + offset[1]);
+
+                                // Rubber band
+                                if self.enable_satellite_map {
+                                    plot_ui.line(
+                                        Line::new("", vec![p_car, pr])
+                                            .color(satellite_casing)
+                                            .style(egui_plot::LineStyle::Dashed { length: 4.0 })
+                                            .width(3.0),
+                                    );
+                                }
                                 plot_ui.line(
-                                    Line::new("White Rubber Band Casing", vec![p_car, pw])
-                                        .color(satellite_casing)
+                                    Line::new("", vec![p_car, pr])
+                                        .color(faint_color)
                                         .style(egui_plot::LineStyle::Dashed { length: 4.0 })
-                                        .width(3.0),
+                                        .width(1.0),
                                 );
-                            }
-                            plot_ui.line(
-                                Line::new("White Rubber Band", vec![p_car, pw])
-                                    .color(theme.reference_secondary_faint)
-                                .style(egui_plot::LineStyle::Dashed { length: 4.0 })
-                                    .width(1.0),
-                            );
-                            
-                            if self.enable_satellite_map {
+
+                                if self.enable_satellite_map {
+                                    plot_ui.points(
+                                        Points::new("", vec![pr])
+                                            .color(satellite_casing)
+                                            .radius(10.5),
+                                    );
+                                }
                                 plot_ui.points(
-                                    Points::new("White Ref Position Halo", vec![pw])
-                                        .color(satellite_casing)
-                                        .radius(10.5),
+                                    Points::new("", vec![pr])
+                                        .color(color)
+                                        .radius(8.0),
                                 );
                             }
-                            plot_ui.points(
-                                Points::new("White Ref Position", vec![pw])
-                                    .color(theme.reference_secondary)
-                                    .radius(8.0),
-                            );
-                        }
-                        
-                        if let Some(c_lap) = ref_cyan_lap {
-                            let (cx_coord, cy_coord) = if self.magnify_line_deltas {
-                                let ref_dist = get_lap_distance_at_time(c_lap, lap_rel_time);
-                                get_magnified_lap_coord(
-                                    c_lap,
-                                    active_lap,
-                                    ref_dist,
-                                    self.magnifier_multiplier,
-                                )
-                            } else {
-                                get_lap_coord_at_time(c_lap, lap_rel_time)
-                            };
-                            let pc =
-                                rotate_point(cx_coord + cyan_offset[0], cy_coord + cyan_offset[1]);
-                            
-                            // Rubber band
-                            if self.enable_satellite_map {
-                                plot_ui.line(
-                                    Line::new("Cyan Rubber Band Casing", vec![p_car, pc])
-                                        .color(satellite_casing)
-                                .style(egui_plot::LineStyle::Dashed { length: 4.0 })
-                                        .width(3.0),
-                                );
-                            }
-                            plot_ui.line(
-                                Line::new("Cyan Rubber Band", vec![p_car, pc])
-                                    .color(theme.reference_primary_faint)
-                                    .style(egui_plot::LineStyle::Dashed { length: 4.0 })
-                                    .width(1.0),
-                            );
-                            
-                            if self.enable_satellite_map {
-                                plot_ui.points(
-                                    Points::new("Cyan Ref Position Halo", vec![pc])
-                                        .color(satellite_casing)
-                                        .radius(10.5),
-                                );
-                            }
-                            plot_ui.points(
-                                Points::new("Cyan Ref Position", vec![pc])
-                                    .color(theme.reference_primary)
-                                    .radius(8.0),
-                            );
-                        }
+                        };
+
+                        render_ref_car_dot(plot_ui, ref_cyan_lap, cyan_offset, theme.reference_primary, theme.reference_primary_faint);
+                        render_ref_car_dot(plot_ui, ref_white_lap, white_offset, theme.reference_secondary, theme.reference_secondary_faint);
 
                         if self.enable_satellite_map {
                             plot_ui.points(
-                                Points::new("Current Position Halo", vec![p_car])
+                                Points::new("", vec![p_car])
                                     .color(satellite_casing)
                                     .radius(10.5),
                             );
                         }
                         plot_ui.points(
-                            Points::new("Current Position", vec![p_car])
+                            Points::new("", vec![p_car])
                                 .color(theme.accent)
                                 .radius(8.0),
                         );
@@ -1001,7 +912,25 @@ impl OpenDavApp {
 
 #[cfg(test)]
 mod tests {
-    use super::TrackMapPlacement;
+    use super::{draw_reference_legend_row, TrackMapPlacement};
+
+    #[test]
+    fn secondary_reference_legend_respects_control_rail_width() {
+        let mut rendered_width = 0.0;
+        egui::__run_test_ui(|ui| {
+            let response = ui.allocate_ui(egui::vec2(160.0, 80.0), |ui| {
+                ui.set_max_width(160.0);
+                draw_reference_legend_row(
+                    ui,
+                    egui::Color32::WHITE,
+                    "Secondary Reference - Lap 999".to_owned(),
+                );
+            });
+            rendered_width = response.response.rect.width();
+        });
+
+        assert!(rendered_width <= 160.0);
+    }
 
     #[test]
     fn graphs_sidebar_reset_rotation_is_ninety_degrees() {
