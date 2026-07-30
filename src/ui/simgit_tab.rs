@@ -481,29 +481,44 @@ impl OpenDavApp {
 
                 normalize_analysis_draft(&mut self.simgit_analysis_draft, &records);
                 ui.add_space(14.0);
-                ui.columns(2, |columns| {
-                    draw_analysis_role(
-                        &mut columns[0],
-                        theme,
-                        "Baseline",
-                        "simgit_baseline_file",
-                        "simgit_baseline_lap",
-                        &records,
-                        &self.simgit_analysis_draft.selected_telemetry,
-                        &mut self.simgit_analysis_draft.baseline_telemetry,
-                        &mut self.simgit_analysis_draft.baseline_lap,
-                    );
-                    draw_analysis_role(
-                        &mut columns[1],
-                        theme,
-                        "Reference",
-                        "simgit_reference_file",
-                        "simgit_reference_lap",
-                        &records,
-                        &self.simgit_analysis_draft.selected_telemetry,
-                        &mut self.simgit_analysis_draft.reference_telemetry,
-                        &mut self.simgit_analysis_draft.reference_lap,
-                    );
+                let role_width = ((ui.available_width() - 58.0) / 2.0).max(120.0);
+                ui.horizontal(|ui| {
+                    ui.allocate_ui(egui::vec2(role_width, 88.0), |ui| {
+                        draw_analysis_role(
+                            ui,
+                            theme,
+                            "Baseline",
+                            "simgit_baseline_file",
+                            "simgit_baseline_lap",
+                            &records,
+                            &self.simgit_analysis_draft.selected_telemetry,
+                            &mut self.simgit_analysis_draft.baseline_telemetry,
+                            &mut self.simgit_analysis_draft.baseline_lap,
+                        );
+                    });
+                    ui.vertical(|ui| {
+                        ui.add_space(27.0);
+                        if ui
+                            .small_button("Swap")
+                            .on_hover_text("Swap baseline and reference")
+                            .clicked()
+                        {
+                            swap_analysis_roles(&mut self.simgit_analysis_draft);
+                        }
+                    });
+                    ui.allocate_ui(egui::vec2(role_width, 88.0), |ui| {
+                        draw_analysis_role(
+                            ui,
+                            theme,
+                            "Reference",
+                            "simgit_reference_file",
+                            "simgit_reference_lap",
+                            &records,
+                            &self.simgit_analysis_draft.selected_telemetry,
+                            &mut self.simgit_analysis_draft.reference_telemetry,
+                            &mut self.simgit_analysis_draft.reference_lap,
+                        );
+                    });
                 });
                 ui.add_space(16.0);
                 ui.separator();
@@ -611,6 +626,7 @@ impl OpenDavApp {
             .id_salt("simgit_team_notes")
             .show(ui, |ui| {
                 for note in &notes {
+                    let is_active = self.active_simgit_note_id.as_deref() == Some(note.id.as_str());
                     let file_name = repository
                         .telemetry()
                         .iter()
@@ -618,8 +634,19 @@ impl OpenDavApp {
                         .map(|record| record.original_name.as_str())
                         .unwrap_or("Unknown telemetry");
                     egui::Frame::NONE
-                        .fill(theme.surface_card)
-                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .fill(if is_active {
+                            theme.surface_elevated
+                        } else {
+                            theme.surface_card
+                        })
+                        .stroke(egui::Stroke::new(
+                            if is_active { 2.0 } else { 1.0 },
+                            if is_active {
+                                note.color.display_color(theme.is_dark)
+                            } else {
+                                theme.border_subtle
+                            },
+                        ))
                         .corner_radius(8.0)
                         .inner_margin(14.0)
                         .show(ui, |ui| {
@@ -633,20 +660,19 @@ impl OpenDavApp {
                                     4.0,
                                     note.color.display_color(theme.is_dark),
                                 );
+                                if is_active {
+                                    ui.label(
+                                        egui::RichText::new("VIEWING")
+                                            .strong()
+                                            .small()
+                                            .color(theme.accent_text),
+                                    );
+                                }
                                 ui.label(
-                                    egui::RichText::new(&note.author)
+                                    egui::RichText::new(note.display_objective())
                                         .strong()
-                                        .color(theme.accent_text),
-                                );
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} | {} | {}",
-                                        file_name,
-                                        format_context(note),
-                                        format_timestamp(note.created_at)
-                                    ))
-                                    .small()
-                                    .color(theme.text_tertiary),
+                                        .size(16.0)
+                                        .color(theme.text_primary),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -662,10 +688,21 @@ impl OpenDavApp {
                                     },
                                 );
                             });
-                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} | {} | {} | {}",
+                                    note.author,
+                                    file_name,
+                                    format_context(note),
+                                    format_timestamp(note.created_at)
+                                ))
+                                .small()
+                                .color(theme.text_tertiary),
+                            );
+                            ui.add_space(4.0);
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&note.body).color(theme.text_primary),
+                                    egui::RichText::new(&note.body).color(theme.text_secondary),
                                 )
                                 .wrap(),
                             );
@@ -695,6 +732,9 @@ impl OpenDavApp {
             match repository.remove_note(&note_id) {
                 Ok(()) => {
                     self.simgit_status_message = Some("Analysis note deleted.".to_owned());
+                    if self.active_simgit_note_id.as_deref() == Some(note_id.as_str()) {
+                        self.active_simgit_note_id = None;
+                    }
                     if let Some(note) = notes.iter().find(|note| note.id == note_id) {
                         let source = crate::simgit::repository::RepositoryRecordRef {
                             project: project.clone(),
@@ -963,9 +1003,17 @@ fn analysis_draft_ready(draft: &crate::SimGitAnalysisDraft) -> bool {
     baseline_ready && reference_ready
 }
 
+fn swap_analysis_roles(draft: &mut crate::SimGitAnalysisDraft) {
+    std::mem::swap(
+        &mut draft.baseline_telemetry,
+        &mut draft.reference_telemetry,
+    );
+    std::mem::swap(&mut draft.baseline_lap, &mut draft.reference_lap);
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{analysis_draft_ready, normalize_analysis_draft};
+    use super::{analysis_draft_ready, normalize_analysis_draft, swap_analysis_roles};
     use crate::simgit::repository::{LapSummary, TelemetryRecord};
 
     fn record(id: &str, laps: &[(i32, f64)]) -> TelemetryRecord {
@@ -1024,5 +1072,28 @@ mod tests {
 
         assert_eq!(draft.baseline_telemetry.as_deref(), Some("reference"));
         assert_eq!(draft.baseline_lap, Some(5));
+    }
+
+    #[test]
+    fn swapping_analysis_roles_moves_each_file_and_lap_together() {
+        let mut draft = crate::SimGitAnalysisDraft {
+            baseline_telemetry: Some("baseline".to_owned()),
+            baseline_lap: Some(3),
+            reference_telemetry: Some("reference".to_owned()),
+            reference_lap: Some(7),
+            ..Default::default()
+        };
+
+        swap_analysis_roles(&mut draft);
+
+        assert_eq!(
+            (
+                draft.baseline_telemetry.as_deref(),
+                draft.baseline_lap,
+                draft.reference_telemetry.as_deref(),
+                draft.reference_lap,
+            ),
+            (Some("reference"), Some(7), Some("baseline"), Some(3))
+        );
     }
 }

@@ -52,13 +52,27 @@ fn display_value_and_unit(
 fn note_context_range(
     context: &crate::simgit::repository::AnalysisContext,
 ) -> Option<(f64, f64)> {
-    if let Some((start, end)) = context.viewport {
-        if start.is_finite() && end.is_finite() && end > start {
-            return Some((start, end));
-        }
+    context.time_range()
+}
+
+fn update_note_hover_state(
+    hovered_note_id: Option<&str>,
+    now: f64,
+    tracked_note_id: &mut Option<String>,
+    hover_started_at: &mut Option<f64>,
+) -> bool {
+    let Some(hovered_note_id) = hovered_note_id else {
+        *tracked_note_id = None;
+        *hover_started_at = None;
+        return false;
+    };
+    if tracked_note_id.as_deref() != Some(hovered_note_id) {
+        *tracked_note_id = Some(hovered_note_id.to_owned());
+        *hover_started_at = Some(now);
+        return false;
     }
-    let cursor = context.cursor_seconds?;
-    cursor.is_finite().then_some((cursor - 0.25, cursor + 0.25))
+    let started_at = hover_started_at.get_or_insert(now);
+    now - *started_at >= 2.5
 }
 
 impl OpenDavApp {
@@ -526,6 +540,11 @@ impl OpenDavApp {
         let mut is_dragging_ticker = self.is_dragging_ticker;
         let mut is_highlight_active = self.is_highlight_active;
         let mut highlight_start = self.highlight_start;
+        let mut active_simgit_note_id = self.active_simgit_note_id.clone();
+        let mut hovered_simgit_note_id = self.hovered_simgit_note_id.clone();
+        let mut simgit_note_hover_started_at = self.simgit_note_hover_started_at;
+        let mut armed_simgit_note_id = None;
+        let frame_time = ui.ctx().input(|input| input.time);
         
         let selected_lap = self.selected_lap;
         let lap_ranges = &loaded.lap_ranges;
@@ -547,6 +566,7 @@ impl OpenDavApp {
 
             // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
             if plot_ui.response().double_clicked() {
+                active_simgit_note_id = None;
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let d_click_x = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     highlight_start = Some(d_click_x);
@@ -604,6 +624,7 @@ impl OpenDavApp {
             }
 
             if plot_ui.response().dragged() {
+                active_simgit_note_id = None;
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     if is_highlight_active {
@@ -637,6 +658,7 @@ impl OpenDavApp {
             }
 
             if plot_ui.response().clicked() {
+                active_simgit_note_id = None;
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     if is_highlight_active {
@@ -662,6 +684,7 @@ impl OpenDavApp {
             if plot_ui.response().hovered() {
                 let scroll = plot_ui.ctx().input(|i| i.smooth_scroll_delta);
                 if scroll.y.abs() > 1.5 {
+                    active_simgit_note_id = None;
                     let is_zooming_in = scroll.y > 0.0;
                     let zoom_factor = if is_zooming_in { 0.925 } else { 1.075 };
                     let mut target_width = visible_width * zoom_factor;
@@ -688,6 +711,51 @@ impl OpenDavApp {
                         visible_x_range = Some((new_min, mut_new_max));
                     }
                 }
+            }
+
+            let hovered_note = plot_ui
+                .pointer_coordinate()
+                .filter(|pointer| plot_ui.response().hovered() && pointer.y >= 10.0)
+                .and_then(|pointer| {
+                    simgit_note_zones.iter().find(|note| {
+                        note_context_range(&note.context)
+                            .is_some_and(|(start, end)| pointer.x >= start && pointer.x <= end)
+                    })
+                });
+            if let Some(note) = hovered_note {
+                if update_note_hover_state(
+                    Some(&note.id),
+                    frame_time,
+                    &mut hovered_simgit_note_id,
+                    &mut simgit_note_hover_started_at,
+                ) {
+                    armed_simgit_note_id = Some(note.id.clone());
+                    plot_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    if plot_ui.response().clicked() {
+                        if let Some((start, end)) = note_context_range(&note.context) {
+                            let snap_start = start.max(0.0);
+                            let snap_end = end.min(max_time);
+                            if snap_end > snap_start {
+                                plot_ui.set_plot_bounds_x(snap_start..=snap_end);
+                                visible_x_range = Some((snap_start, snap_end));
+                                cursor_x = note.context.cursor_seconds.or(Some(snap_start));
+                                active_simgit_note_id = Some(note.id.clone());
+                                is_highlight_active = false;
+                                highlight_start = None;
+                            }
+                        }
+                    }
+                }
+                plot_ui
+                    .ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            } else {
+                update_note_hover_state(
+                    None,
+                    frame_time,
+                    &mut hovered_simgit_note_id,
+                    &mut simgit_note_hover_started_at,
+                );
             }
 
             // High-performance MinMax decimator closure (prevents aliasing/jumping spikes)
@@ -785,6 +853,25 @@ impl OpenDavApp {
                     continue;
                 }
                 let color = note.color.display_color(is_dark);
+                let is_active = active_simgit_note_id.as_deref() == Some(note.id.as_str());
+                let is_armed = armed_simgit_note_id.as_deref() == Some(note.id.as_str());
+                let pulse = ((frame_time * 5.0).sin() * 0.5 + 0.5) as f32;
+                let fill_strength = if is_armed {
+                    0.20 + 0.10 * pulse
+                } else if is_active {
+                    0.24
+                } else if is_dark {
+                    0.11
+                } else {
+                    0.14
+                };
+                let stroke_width = if is_armed {
+                    2.5 + 1.5 * pulse
+                } else if is_active {
+                    3.0
+                } else {
+                    1.0
+                };
                 plot_ui.polygon(
                     Polygon::new(
                         format!("SimGitNoteZone_{}", note.id),
@@ -795,9 +882,28 @@ impl OpenDavApp {
                             [start, 1000.0],
                         ]),
                     )
-                    .fill_color(color.gamma_multiply(if is_dark { 0.11 } else { 0.14 }))
-                    .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.7))),
+                    .fill_color(color.gamma_multiply(fill_strength))
+                    .stroke(egui::Stroke::new(
+                        stroke_width,
+                        color.gamma_multiply(if is_active || is_armed { 1.0 } else { 0.7 }),
+                    )),
                 );
+            }
+            if let Some(note) = armed_simgit_note_id.as_ref().and_then(|note_id| {
+                simgit_note_zones
+                    .iter()
+                    .find(|note| note.id == *note_id)
+            }) {
+                if let Some((start, end)) = note_context_range(&note.context) {
+                    plot_ui.text(Text::new(
+                        format!("SimGitNoteHint_{}", note.id),
+                        PlotPoint::new((start + end) * 0.5, 97.0),
+                        egui::RichText::new(format!("Click to view: {}", note.display_objective()))
+                            .strong()
+                            .color(theme.text_primary)
+                            .background_color(theme.surface_elevated),
+                    ));
+                }
             }
 
             // D. DRAW SECTOR DELTA SHADING (if enabled)
@@ -1143,6 +1249,9 @@ impl OpenDavApp {
         self.is_dragging_ticker = is_dragging_ticker;
         self.is_highlight_active = is_highlight_active;
         self.highlight_start = highlight_start;
+        self.active_simgit_note_id = active_simgit_note_id;
+        self.hovered_simgit_note_id = hovered_simgit_note_id;
+        self.simgit_note_hover_started_at = simgit_note_hover_started_at;
 
         #[cfg(feature = "dev_tools")]
         {
@@ -1156,7 +1265,7 @@ impl OpenDavApp {
 
 #[cfg(test)]
 mod unit_tests {
-    use super::{display_value_and_unit, note_context_range};
+    use super::{display_value_and_unit, note_context_range, update_note_hover_state};
     use crate::config::worksheet::CacheSelector;
 
     #[test]
@@ -1203,5 +1312,45 @@ mod unit_tests {
         };
 
         assert_eq!(note_context_range(&context), Some((14.75, 15.25)));
+    }
+
+    #[test]
+    fn note_hover_arms_after_two_and_a_half_seconds() {
+        let mut tracked_note_id = None;
+        let mut hover_started_at = None;
+
+        assert!(!update_note_hover_state(
+            Some("note-a"),
+            10.0,
+            &mut tracked_note_id,
+            &mut hover_started_at,
+        ));
+        assert!(!update_note_hover_state(
+            Some("note-a"),
+            12.49,
+            &mut tracked_note_id,
+            &mut hover_started_at,
+        ));
+        assert!(update_note_hover_state(
+            Some("note-a"),
+            12.5,
+            &mut tracked_note_id,
+            &mut hover_started_at,
+        ));
+    }
+
+    #[test]
+    fn changing_hovered_note_restarts_the_arming_delay() {
+        let mut tracked_note_id = Some("note-a".to_owned());
+        let mut hover_started_at = Some(10.0);
+
+        assert!(!update_note_hover_state(
+            Some("note-b"),
+            13.0,
+            &mut tracked_note_id,
+            &mut hover_started_at,
+        ));
+        assert_eq!(tracked_note_id.as_deref(), Some("note-b"));
+        assert_eq!(hover_started_at, Some(13.0));
     }
 }

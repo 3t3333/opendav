@@ -1321,6 +1321,24 @@ impl OpenDavApp {
             "Show color-coded context zones",
         );
         ui.add_space(8.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.simgit_note_author)
+                .hint_text("Author")
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(6.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.simgit_note_objective)
+                .hint_text("Objective, e.g. Less initial brake")
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(6.0);
+        ui.add_sized(
+            [ui.available_width(), 92.0],
+            egui::TextEdit::multiline(&mut self.simgit_note_draft)
+                .hint_text("Explain why and what the driver should change..."),
+        );
+        ui.add_space(8.0);
         ui.label(
             egui::RichText::new("Color tag")
                 .strong()
@@ -1354,18 +1372,8 @@ impl OpenDavApp {
             }
         });
         ui.add_space(8.0);
-        ui.add(
-            egui::TextEdit::singleline(&mut self.simgit_note_author)
-                .hint_text("Author")
-                .desired_width(f32::INFINITY),
-        );
-        ui.add_space(6.0);
-        ui.add_sized(
-            [ui.available_width(), 92.0],
-            egui::TextEdit::multiline(&mut self.simgit_note_draft)
-                .hint_text("What did you notice here?"),
-        );
-        let can_submit = !self.simgit_note_draft.trim().is_empty();
+        let can_submit = !self.simgit_note_objective.trim().is_empty()
+            && !self.simgit_note_draft.trim().is_empty();
         if ui
             .add_enabled(
                 can_submit,
@@ -1390,11 +1398,13 @@ impl OpenDavApp {
             match repository.add_note(
                 &source.telemetry_id,
                 &self.simgit_note_author,
+                &self.simgit_note_objective,
                 &self.simgit_note_draft,
                 self.simgit_note_color,
                 context,
             ) {
                 Ok(_) => {
+                    self.simgit_note_objective.clear();
                     self.simgit_note_draft.clear();
                     self.simgit_status_message = Some("Analysis note saved locally.".to_owned());
                     let _ = self.refresh_simgit_note_cache(&source);
@@ -1427,9 +1437,21 @@ impl OpenDavApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for note in &notes {
+                    let is_active = self.active_simgit_note_id.as_deref() == Some(note.id.as_str());
                     egui::Frame::NONE
-                        .fill(theme.surface_card)
-                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .fill(if is_active {
+                            theme.surface_elevated
+                        } else {
+                            theme.surface_card
+                        })
+                        .stroke(egui::Stroke::new(
+                            if is_active { 2.0 } else { 1.0 },
+                            if is_active {
+                                note.color.display_color(is_dark)
+                            } else {
+                                theme.border_subtle
+                            },
+                        ))
                         .corner_radius(6.0)
                         .inner_margin(9.0)
                         .show(ui, |ui| {
@@ -1443,10 +1465,19 @@ impl OpenDavApp {
                                     4.0,
                                     note.color.display_color(is_dark),
                                 );
+                                if is_active {
+                                    ui.label(
+                                        egui::RichText::new("VIEWING")
+                                            .strong()
+                                            .small()
+                                            .color(theme.accent_text),
+                                    );
+                                }
                                 ui.label(
-                                    egui::RichText::new(&note.author)
+                                    egui::RichText::new(note.display_objective())
                                         .strong()
-                                        .color(theme.accent_text),
+                                        .size(15.0)
+                                        .color(theme.text_primary),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -1457,9 +1488,19 @@ impl OpenDavApp {
                                     },
                                 );
                             });
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} | {}",
+                                    note.author,
+                                    format_note_context(note)
+                                ))
+                                .small()
+                                .color(theme.text_tertiary),
+                            );
+                            ui.add_space(4.0);
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&note.body).color(theme.text_primary),
+                                    egui::RichText::new(&note.body).color(theme.text_secondary),
                                 )
                                 .wrap(),
                             );
@@ -1490,6 +1531,9 @@ impl OpenDavApp {
             if let Err(error) = repository.remove_note(&note_id) {
                 self.simgit_status_message = Some(error.to_string());
             } else {
+                if self.active_simgit_note_id.as_deref() == Some(note_id.as_str()) {
+                    self.active_simgit_note_id = None;
+                }
                 let _ = self.refresh_simgit_note_cache(&source);
             }
         }
@@ -1718,6 +1762,15 @@ fn worksheet_label(tab: crate::config::worksheet::WorksheetTab) -> &'static str 
         WorksheetTab::TlltdDistribution => "TLLTD Distribution",
         WorksheetTab::CompressionRates => "Compression Rates",
     }
+}
+
+fn format_note_context(note: &crate::simgit::repository::AnalysisNote) -> String {
+    let lap = note
+        .context
+        .lap_number
+        .map(|lap| format!("Lap {lap}"))
+        .unwrap_or_else(|| "No lap".to_owned());
+    format!("{} | {lap}", note.context.worksheet)
 }
 
 fn format_channel_unit_val(

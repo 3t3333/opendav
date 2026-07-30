@@ -187,10 +187,14 @@ pub struct OpenDavApp {
     pub simgit_active_tab: SimGitTab,
     pub simgit_new_ws_name: String,
     pub show_new_ws_popup: bool,
+    pub simgit_note_objective: String,
     pub simgit_note_draft: String,
     pub simgit_note_author: String,
     pub simgit_note_color: crate::simgit::repository::NoteColor,
     pub show_simgit_note_zones: bool,
+    pub active_simgit_note_id: Option<String>,
+    pub hovered_simgit_note_id: Option<String>,
+    pub simgit_note_hover_started_at: Option<f64>,
     pub simgit_notes_cache: std::collections::HashMap<
         crate::simgit::repository::RepositoryRecordRef,
         Vec<crate::simgit::repository::AnalysisNote>,
@@ -264,10 +268,14 @@ impl Default for OpenDavApp {
             simgit_active_tab: SimGitTab::Dashboard,
             simgit_new_ws_name: String::new(),
             show_new_ws_popup: false,
+            simgit_note_objective: String::new(),
             simgit_note_draft: String::new(),
             simgit_note_author: "Driver".to_owned(),
             simgit_note_color: crate::simgit::repository::NoteColor::Blue,
             show_simgit_note_zones: true,
+            active_simgit_note_id: None,
+            hovered_simgit_note_id: None,
+            simgit_note_hover_started_at: None,
             simgit_notes_cache: std::collections::HashMap::new(),
             simgit_status_message: None,
             simgit_import_receiver: None,
@@ -1450,7 +1458,8 @@ impl OpenDavApp {
         let baseline_lap = note.context.lap_number.unwrap_or(0);
         self.load_simgit_analysis_sources(sources, (baseline, baseline_lap), cyan, secondary)?;
         self.cursor_x = note.context.cursor_seconds;
-        self.visible_x_range = note.context.viewport;
+        self.visible_x_range = note.context.time_range();
+        self.active_simgit_note_id = Some(note.id.clone());
         self.active_worksheet = match note.context.worksheet.as_str() {
             "Vehicle" => WorksheetTab::Vehicle,
             "Tyre" => WorksheetTab::Tyre,
@@ -1540,6 +1549,9 @@ impl OpenDavApp {
         });
 
         self.sessions = loaded_sessions;
+        self.active_simgit_note_id = None;
+        self.hovered_simgit_note_id = None;
+        self.simgit_note_hover_started_at = None;
         for (source, notes) in note_updates {
             self.simgit_notes_cache.insert(source, notes);
         }
@@ -1596,6 +1608,9 @@ impl OpenDavApp {
         let new_session = self.build_loaded_session(path, file_name.clone(), source)?;
 
         self.sessions.push(new_session);
+        self.active_simgit_note_id = None;
+        self.hovered_simgit_note_id = None;
+        self.simgit_note_hover_started_at = None;
         let new_idx = self.sessions.len() - 1;
         self.primary_session_idx = new_idx;
         self.active_file = Some(file_name);

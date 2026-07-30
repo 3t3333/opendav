@@ -114,17 +114,48 @@ pub struct AnalysisContext {
     pub secondary_reference: Option<ReferenceLapContext>,
 }
 
+impl AnalysisContext {
+    pub fn time_range(&self) -> Option<(f64, f64)> {
+        if let Some((start, end)) = self.viewport {
+            if start.is_finite() && end.is_finite() && end > start {
+                return Some((start, end));
+            }
+        }
+        let cursor = self.cursor_seconds?;
+        cursor
+            .is_finite()
+            .then_some((cursor - 0.25, cursor + 0.25))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AnalysisNote {
     pub id: String,
     pub telemetry_id: String,
     pub author: String,
+    #[serde(default)]
+    pub objective: String,
     pub body: String,
     #[serde(default)]
     pub color: NoteColor,
     pub context: AnalysisContext,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+impl AnalysisNote {
+    pub fn display_objective(&self) -> &str {
+        let objective = self.objective.trim();
+        if objective.is_empty() {
+            self.body
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("Analysis note")
+        } else {
+            objective
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -467,6 +498,7 @@ impl SimGitRepository {
         &mut self,
         telemetry_id: &str,
         author: &str,
+        objective: &str,
         body: &str,
         color: NoteColor,
         context: AnalysisContext,
@@ -485,10 +517,16 @@ impl SimGitRepository {
                 "analysis notes cannot be empty".to_owned(),
             ));
         }
+        let objective = objective.trim();
+        if objective.is_empty() {
+            return Err(RepositoryError::Integrity(
+                "analysis notes require an objective".to_owned(),
+            ));
+        }
         let timestamp = unix_timestamp();
         let id = blake3::hash(
             format!(
-                "{telemetry_id}:{timestamp}:{}:{body}",
+                "{telemetry_id}:{timestamp}:{}:{objective}:{body}",
                 self.manifest.notes.len()
             )
             .as_bytes(),
@@ -500,6 +538,7 @@ impl SimGitRepository {
             id,
             telemetry_id: telemetry_id.to_owned(),
             author: if author.is_empty() { "Driver" } else { author }.to_owned(),
+            objective: objective.to_owned(),
             body: body.to_owned(),
             color,
             context,
@@ -678,6 +717,7 @@ mod tests {
             .add_note(
                 "telemetry-id",
                 "Driver",
+                "Reduce entry rotation",
                 "Rear instability at entry",
                 NoteColor::Orange,
                 AnalysisContext {
@@ -701,6 +741,7 @@ mod tests {
             SimGitRepository::open(&root, "Race Team").expect("repository should reopen");
 
         assert_eq!(reopened.notes()[0].context.cursor_seconds, Some(42.5));
+        assert_eq!(reopened.notes()[0].objective, "Reduce entry rotation");
         assert_eq!(reopened.notes()[0].color, NoteColor::Orange);
         assert_eq!(
             reopened.notes()[0]
@@ -725,6 +766,8 @@ mod tests {
         .expect("legacy note should deserialize");
 
         assert_eq!(note.color, NoteColor::Blue);
+        assert!(note.objective.is_empty());
+        assert_eq!(note.display_objective(), "Legacy");
         assert!(note.context.cyan_reference.is_none());
         assert!(note.context.secondary_reference.is_none());
     }
