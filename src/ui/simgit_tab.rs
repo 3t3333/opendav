@@ -1,4 +1,5 @@
 use crate::config::theme::AppTheme;
+use crate::simgit::repository::{AnalysisNote, ImportBatchSummary, ImportStatus};
 use crate::{OpenDavApp, SimGitTab};
 
 impl OpenDavApp {
@@ -13,462 +14,1015 @@ impl OpenDavApp {
                     .inner_margin(10.0),
             )
             .show_inside(ui, |ui| {
-                let is_narrow = ui.available_width() < 760.0;
-
-                if is_narrow {
+                let narrow = ui.available_width() < 820.0;
+                if narrow {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new("SimGit")
-                                .strong()
-                                .color(theme.accent_text)
-                                .size(23.0),
-                        );
-                        ui.add_space(10.0);
-                        self.draw_simgit_tabs(ui, theme);
+                        self.draw_simgit_title_and_tabs(ui, theme);
                     });
                     ui.add_space(8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        self.draw_simgit_workspace_controls(ui, theme);
-                    });
+                    ui.horizontal_wrapped(|ui| self.draw_simgit_repository_controls(ui, theme));
                 } else {
-                ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("SimGit")
-                                .strong()
-                                .color(theme.accent_text)
-                                .size(23.0),
-                        );
-                        ui.add_space(18.0);
-                        self.draw_simgit_tabs(ui, theme);
-
+                    ui.horizontal(|ui| {
+                        self.draw_simgit_title_and_tabs(ui, theme);
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            self.draw_simgit_workspace_controls(ui, theme)
+                            self.draw_simgit_repository_controls(ui, theme);
                         });
                     });
                 }
             });
-
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
                     .fill(theme.surface_root)
-                    .inner_margin(15.0),
+                    .inner_margin(16.0),
             )
-            .show_inside(ui, |ui| match self.simgit_active_tab {
-                SimGitTab::Dashboard => self.draw_simgit_dashboard(ui, theme),
-                SimGitTab::Setups => self.draw_simgit_setups(ui, theme),
-                SimGitTab::Cloud => {
-                    ui.heading(
-                        egui::RichText::new("Cloud Sync")
-                            .color(theme.text_primary)
-                            .size(24.0),
-                    );
-                    ui.label(
-                        egui::RichText::new("Cloud synchronization is planned for Phase 2.")
-                            .color(theme.text_secondary),
-                    );
+            .show_inside(ui, |ui| {
+                if let Some(message) = &self.simgit_status_message {
+                    egui::Frame::NONE
+                        .fill(theme.surface_elevated)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(6.0)
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(message).color(theme.text_secondary),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    ui.add_space(12.0);
+                }
+
+                match self.simgit_active_tab {
+                    SimGitTab::Dashboard => self.draw_simgit_repository(ui, theme),
+                    SimGitTab::Setups => self.draw_simgit_team_notes(ui, theme),
+                    SimGitTab::Cloud => self.draw_simgit_sync_status(ui, theme),
                 }
             });
+        if self.show_simgit_analysis_builder {
+            self.draw_simgit_analysis_builder(ui.ctx(), theme);
+        }
     }
 
-    fn draw_simgit_tabs(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
-                    let tabs = [
-                        (SimGitTab::Dashboard, "Dashboard"),
-                        (SimGitTab::Setups, "Setups & Commits"),
-                        (SimGitTab::Cloud, "Cloud Sync"),
-                    ];
+    pub(crate) fn poll_simgit_import(&mut self) {
+        let result = self
+            .simgit_import_receiver
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv);
+        match result {
+            Some(Ok(summary)) => {
+                self.simgit_status_message = Some(format_import_summary(&summary));
+                self.simgit_import_receiver = None;
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.simgit_status_message =
+                    Some("Telemetry import stopped before completing.".to_owned());
+                self.simgit_import_receiver = None;
+            }
+            _ => {}
+        }
+    }
 
-                    for (tab, name) in tabs {
-                        let is_active = self.simgit_active_tab == tab;
-            let color = if is_active {
+    fn draw_simgit_title_and_tabs(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
+        ui.label(
+            egui::RichText::new("SimGit")
+                .strong()
+                .color(theme.accent_text)
+                .size(23.0),
+        );
+        ui.add_space(18.0);
+        for (tab, label) in [
+            (SimGitTab::Dashboard, "Repository"),
+            (SimGitTab::Setups, "Team Notes"),
+            (SimGitTab::Cloud, "Sync"),
+        ] {
+            let active = self.simgit_active_tab == tab;
+            let color = if active {
                 theme.text_primary
             } else {
                 theme.text_tertiary
             };
             if ui
                 .selectable_label(
-                    is_active,
-                    egui::RichText::new(name).color(color).strong().size(16.0),
+                    active,
+                    egui::RichText::new(label).color(color).strong().size(15.0),
                 )
                 .clicked()
             {
-                            self.simgit_active_tab = tab;
-                        }
-                    }
-    }
-
-    fn draw_simgit_workspace_controls(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
-                        if self.simgit_manager.active_project.is_some() {
-            let commit_button = egui::Button::new(
-                egui::RichText::new("+ Commit Files")
-                    .strong()
-                    .color(theme.on_accent)
-                    .size(15.0),
-            )
-            .fill(theme.accent)
-            .stroke(egui::Stroke::new(1.0, theme.accent_text));
-            if ui.add(commit_button).clicked() {
-                                if let Some(files) = rfd::FileDialog::new()
-                                    .add_filter("iRacing Telemetry", &["ibt"])
-                                    .pick_files()
-                                {
-                    if let Some(project) = self.simgit_manager.active_project.as_ref() {
-                        crate::simgit::history::commit_files(
-                            &self.simgit_manager.root_dir.join(project),
-                            &files,
-                        );
-                    }
-                                }
-                            }
-                        }
-
-                        if self.show_new_ws_popup {
-            let confirm = egui::Button::new(
-                egui::RichText::new("Confirm")
-                    .color(theme.success)
-                    .strong()
-                    .size(14.0),
-            )
-            .fill(theme.surface_elevated)
-            .stroke(egui::Stroke::new(1.0, theme.success));
-            if ui.add(confirm).clicked() && !self.simgit_new_ws_name.is_empty() {
-                                    let _ = self.simgit_manager.create_project(&self.simgit_new_ws_name);
-                self.simgit_manager
-                    .set_active_project(&self.simgit_new_ws_name);
-                                    self.simgit_new_ws_name.clear();
-                                    self.show_new_ws_popup = false;
-                                }
-
-            if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new("Cancel")
-                            .color(theme.text_secondary)
-                            .size(14.0),
-                    )
-                    .fill(theme.surface_elevated)
-                    .stroke(egui::Stroke::new(1.0, theme.border_subtle)),
-                )
-                .clicked()
-            {
-                                self.show_new_ws_popup = false;
-                            }
-            ui.add(
-                egui::TextEdit::singleline(&mut self.simgit_new_ws_name)
-                    .hint_text("Workspace name")
-                    .desired_width(190.0),
-            );
-                        } else {
-            if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new("+ New")
-                            .color(theme.accent_text)
-                            .strong()
-                            .size(14.0),
-                    )
-                    .fill(theme.surface_elevated)
-                    .stroke(egui::Stroke::new(1.0, theme.border_subtle)),
-                )
-                .clicked()
-            {
-                                self.show_new_ws_popup = true;
-                            }
-                            
-            let mut selected_proj = self
-                .simgit_manager
-                .active_project
-                .clone()
-                .unwrap_or_else(|| "Select Workspace".to_string());
-                            let projects = self.simgit_manager.list_projects();
-                            
-            egui::ComboBox::from_id_salt("workspace_selector")
-                .width(180.0)
-                .selected_text(
-                    egui::RichText::new(&selected_proj)
-                        .strong()
-                        .color(theme.text_primary)
-                        .size(14.0),
-                )
-                                .show_ui(ui, |ui| {
-                                    for proj in projects {
-                        if ui
-                            .selectable_value(&mut selected_proj, proj.clone(), &proj)
-                            .changed()
-                        {
-                                            self.simgit_manager.set_active_project(&proj);
-                                        }
-                                    }
-                                });
-                        }
-    }
-
-    fn draw_simgit_dashboard(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
-        ui.heading(
-            egui::RichText::new("Recent Sessions")
-                .strong()
-                .color(theme.text_primary)
-                .size(24.0),
-        );
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("Telemetry committed to the active workspace.")
-                .color(theme.text_secondary)
-                .size(14.0),
-        );
-        ui.add_space(16.0);
-
-        if let Some(ref proj_ref) = self.simgit_manager.active_project {
-            let proj = proj_ref.clone();
-            let root_dir = self.simgit_manager.root_dir.clone();
-            let history = crate::simgit::history::get_history(&root_dir.join(&proj));
-
-            if history.is_empty() {
-                egui::Frame::NONE
-                    .fill(theme.surface_panel)
-                    .stroke(egui::Stroke::new(1.0, theme.border_subtle))
-                    .corner_radius(10.0)
-                    .inner_margin(18.0)
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                "No sessions recorded yet. Commit one or more .ibt files to begin.",
-                            )
-                            .color(theme.text_secondary),
-                        );
-                    });
-            } else {
-                egui::ScrollArea::vertical()
-                    .id_salt("simgit_session_scroll")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        let gap = 12.0;
-                        let available_width = ui.available_width();
-                        let columns = ((available_width + gap) / (280.0 + gap))
-                            .floor()
-                            .max(1.0);
-                        let card_width =
-                            ((available_width - gap * (columns - 1.0)) / columns).max(1.0);
-                            
-                        ui.spacing_mut().item_spacing.x = gap;
-                        ui.horizontal_wrapped(|ui| {
-                            for entry in history.iter().rev() {
-                            let current_proj = proj.clone();
-                            let current_root = root_dir.clone();
-                            
-                                egui::Frame::NONE
-                                    .fill(theme.surface_card)
-                                    .corner_radius(10.0)
-                                    .stroke(egui::Stroke::new(1.0, theme.border_subtle))
-                                .inner_margin(0.0)
-                                .show(ui, |ui| {
-                                        let (rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(card_width, 168.0),
-                                            egui::Sense::hover(),
-                                        );
-                                    
-                                    if let Some(tid) = entry.track_id {
-                                            if let std::collections::hash_map::Entry::Vacant(entry) =
-                                                self.simgit_track_maps.entry(tid)
-                                            {
-                                                let json_path = std::env::current_dir()
-                                                    .unwrap()
-                                                    .join("exports")
-                                                    .join("track_maps")
-                                                    .join(format!("{}.json", tid));
-                                            if json_path.exists() {
-                                                    if let Ok(json_str) =
-                                                        std::fs::read_to_string(&json_path)
-                                                    {
-                                                        if let Ok(segments) =
-                                                            serde_json::from_str::<
-                                                                Vec<Vec<[f64; 2]>>,
-                                                            >(&json_str)
-                                                        {
-                                                            entry.insert(segments);
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        let mut plot_ui_builder = ui.new_child(
-                                                egui::UiBuilder::new().max_rect(rect).layout(
-                                                    egui::Layout::top_down_justified(
-                                                        egui::Align::Center,
-                                                    ),
-                                                ),
-                                        );
-                                            let plot = egui_plot::Plot::new(format!(
-                                                "map_plot_{}_{}",
-                                                tid, entry.file_name
-                                            ))
-                                            .data_aspect(1.0)
-                                            .show_axes(false)
-                                            .show_grid(false)
-                                            .allow_zoom(false)
-                                            .allow_drag(false)
-                                            .allow_scroll(false)
-                                            .show_background(false);
-
-                                        plot.show(&mut plot_ui_builder, |plot_ui| {
-                                                if let Some(segments) =
-                                                    self.simgit_track_maps.get(&tid)
-                                                {
-                                                for seg_pts in segments {
-                                                        plot_ui.line(
-                                                            egui_plot::Line::new(
-                                                                "",
-                                                                egui_plot::PlotPoints::from(
-                                                                    seg_pts.clone(),
-                                                                ),
-                                                            )
-                                                            .color(
-                                                                theme.reference_primary_faint,
-                                                            )
-                                                            .width(3.0),
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    }
-                                    
-                                        let inner_rect = rect.shrink(14.0);
-                                    let mut child_ui = ui.new_child(
-                                        egui::UiBuilder::new()
-                                            .max_rect(inner_rect)
-                                                .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                                    );
-                                    
-                                    child_ui.vertical(|ui| {
-                                            let file_response = ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(&entry.file_name)
-                                                        .strong()
-                                                        .color(theme.text_primary)
-                                                        .size(15.0),
-                                                )
-                                                .truncate(),
-                                            );
-                                            file_response.on_hover_text(&entry.file_name);
-                                        ui.add_space(8.0);
-                                        
-                                            let has_no_changes = entry
-                                                .diff_summary
-                                                .contains("No Changes")
-                                                || entry.diff_summary.contains("Baseline");
-                                            let summary_color = if has_no_changes {
-                                                theme.text_secondary
-                                        } else {
-                                                theme.accent_text
-                                        };
-                                            let summary_response = ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(&entry.diff_summary)
-                                                        .color(summary_color)
-                                                        .strong(),
-                                                )
-                                                .truncate(),
-                                            );
-                                            summary_response.on_hover_text(&entry.diff_summary);
-                                        
-                                            ui.with_layout(
-                                                egui::Layout::bottom_up(egui::Align::LEFT),
-                                                |ui| {
-                                            ui.horizontal(|ui| {
-                                                        let track_label = entry.track_id.map_or_else(
-                                                            || "No track data".to_string(),
-                                                            |tid| format!("Track ID: {}", tid),
-                                                        );
-                                                        ui.add(
-                                                            egui::Label::new(
-                                                                egui::RichText::new(track_label)
-                                                                    .color(theme.text_tertiary)
-                                                                    .small(),
-                                                            )
-                                                            .truncate(),
-                                                        );
-                                                
-                                                        ui.with_layout(
-                                                            egui::Layout::right_to_left(
-                                                                egui::Align::Center,
-                                                            ),
-                                                            |ui| {
-                                                                let delete = egui::Button::new(
-                                                                    egui::RichText::new("Delete")
-                                                                        .color(theme.danger)
-                                                                        .strong(),
-                                                                )
-                                                                .fill(theme.surface_elevated)
-                                                                .stroke(egui::Stroke::new(
-                                                                    1.0,
-                                                                    theme.danger,
-                                                                ));
-                                                                if ui.add(delete).clicked() {
-                                                                    crate::simgit::history::remove_file(
-                                                                        &current_root
-                                                                            .join(&current_proj),
-                                                                        &entry.file_name,
-                                                                    );
-                                                    }
-
-                                                                let load = egui::Button::new(
-                                                                    egui::RichText::new("Load")
-                                                                        .color(theme.success)
-                                                                        .strong(),
-                                                                )
-                                                                .fill(theme.surface_elevated)
-                                                                .stroke(egui::Stroke::new(
-                                                                    1.0,
-                                                                    theme.success,
-                                                                ));
-                                                                if ui.add(load).clicked() {
-                                                                    let file_path = current_root
-                                                                        .join(&current_proj)
-                                                                        .join("setups")
-                                                                        .join(&entry.file_name);
-                                                        if file_path.exists() {
-                                                                        self.load_telemetry_file(
-                                                                            &file_path,
-                                                                        );
-                                                        }
-                                                    }
-                                                            },
-                                                        );
-                                                });
-                                                },
-                                            );
-                                            });
-                                        });
-                        }
-                    });
-                });
+                self.simgit_active_tab = tab;
             }
-        } else {
-            egui::Frame::NONE
-                .fill(theme.surface_panel)
-                .stroke(egui::Stroke::new(1.0, theme.border_subtle))
-                .corner_radius(10.0)
-                .inner_margin(18.0)
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "No active workspace. Select one above or create a new workspace.",
-                        )
-                        .color(theme.text_secondary),
-                    );
-                });
         }
     }
 
-    fn draw_simgit_setups(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
+    fn draw_simgit_repository_controls(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
+        let importing = self.simgit_import_receiver.is_some();
+        if self.simgit_manager.active_project.is_some() {
+            let button = egui::Button::new(
+                egui::RichText::new(if importing {
+                    "Importing..."
+                } else {
+                    "+ Import IBT"
+                })
+                .strong()
+                .color(theme.on_accent),
+            )
+            .fill(theme.accent);
+            if ui.add_enabled(!importing, button).clicked() {
+                if let Some(files) = rfd::FileDialog::new()
+                    .add_filter("iRacing Telemetry", &["ibt"])
+                    .pick_files()
+                {
+                    self.start_simgit_import(files);
+                }
+            }
+        }
+
+        if self.show_new_ws_popup {
+            if ui.button("Cancel").clicked() {
+                self.show_new_ws_popup = false;
+            }
+            if ui.button("Create").clicked() {
+                match self.simgit_manager.create_project(&self.simgit_new_ws_name) {
+                    Ok(()) => {
+                        self.simgit_status_message = Some(format!(
+                            "Created local repository '{}'.",
+                            self.simgit_new_ws_name.trim()
+                        ));
+                        self.simgit_new_ws_name.clear();
+                        self.show_new_ws_popup = false;
+                    }
+                    Err(error) => self.simgit_status_message = Some(error.to_string()),
+                }
+            }
+            ui.add(
+                egui::TextEdit::singleline(&mut self.simgit_new_ws_name)
+                    .hint_text("Repository name")
+                    .desired_width(180.0),
+            );
+        } else if ui.button("+ New Repository").clicked() {
+            self.show_new_ws_popup = true;
+        }
+
+        let selected = self
+            .simgit_manager
+            .active_project
+            .clone()
+            .unwrap_or_else(|| "Select Repository".to_owned());
+        let mut selection = None;
+        egui::ComboBox::from_id_salt("simgit_repository_selector")
+            .width(190.0)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for project in self.simgit_manager.list_projects() {
+                    if ui.selectable_label(false, &project).clicked() {
+                        selection = Some(project);
+                    }
+                }
+            });
+        if let Some(project) = selection {
+            if let Err(error) = self.simgit_manager.set_active_project(&project) {
+                self.simgit_status_message = Some(error.to_string());
+            }
+        }
+    }
+
+    fn start_simgit_import(&mut self, files: Vec<std::path::PathBuf>) {
+        let Some(project) = self.simgit_manager.active_project.clone() else {
+            self.simgit_status_message = Some("Select a repository before importing.".to_owned());
+            return;
+        };
+        let root = self.simgit_manager.root_dir.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.simgit_import_receiver = Some(receiver);
+        self.simgit_status_message =
+            Some(format!("Importing {} telemetry file(s)...", files.len()));
+        std::thread::spawn(move || {
+            let mut summary = ImportBatchSummary::default();
+            match crate::simgit::repository::SimGitRepository::open(&root, &project) {
+                Ok(mut repository) => {
+                    for file in files {
+                        match repository.import_ibt(&file) {
+                            Ok(result) if result.status == ImportStatus::Imported => {
+                                summary.imported += 1;
+                            }
+                            Ok(_) => summary.already_present += 1,
+                            Err(error) => summary.failures.push(format!(
+                                "{}: {error}",
+                                file.file_name().unwrap_or_default().to_string_lossy()
+                            )),
+                        }
+                    }
+                }
+                Err(error) => summary.failures.push(error.to_string()),
+            }
+            let _ = sender.send(summary);
+        });
+    }
+
+    fn draw_simgit_repository(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
         ui.heading(
-            egui::RichText::new("Setups & Commits")
+            egui::RichText::new("Telemetry Repository")
                 .color(theme.text_primary)
-                .size(24.0),
+                .size(25.0),
         );
         ui.label(
-            egui::RichText::new("History and diff tools are planned for a future update.")
-                .color(theme.text_secondary),
+            egui::RichText::new(
+                "Content-addressed, compressed telemetry ready for analysis and future team sync.",
+            )
+            .color(theme.text_secondary),
         );
+        ui.add_space(16.0);
+
+        let Some(project) = self.simgit_manager.active_project.clone() else {
+            draw_empty_repository(ui, theme, "Create or select a repository to begin.");
+            return;
+        };
+        let mut repository = match self.simgit_manager.repository(&project) {
+            Ok(repository) => repository,
+            Err(error) => {
+                draw_empty_repository(ui, theme, &error.to_string());
+                return;
+            }
+        };
+        let mut records = repository.telemetry().to_vec();
+        records.sort_by_key(|record| std::cmp::Reverse(record.imported_at));
+        if records.is_empty() {
+            draw_empty_repository(
+                ui,
+                theme,
+                "Import one or more .ibt files. Duplicate content is stored only once.",
+            );
+            return;
+        }
+
+        let analyze_button = egui::Button::new(
+            egui::RichText::new("Analyze Laps")
+                .strong()
+                .color(theme.on_accent)
+                .size(15.0),
+        )
+        .fill(theme.accent)
+        .min_size(egui::vec2(150.0, 34.0));
+        if ui.add(analyze_button).clicked() {
+            self.prepare_simgit_analysis_builder(&mut repository, &records);
+        }
+        ui.add_space(14.0);
+
+        let mut open_record = None;
+        let mut delete_record = None;
+        egui::ScrollArea::vertical()
+            .id_salt("simgit_repository_records")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for record in &records {
+                    let note_count = repository.notes_for(&record.id).len();
+                    egui::Frame::NONE
+                        .fill(theme.surface_card)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(9.0)
+                        .inner_margin(14.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&record.original_name)
+                                                .strong()
+                                                .color(theme.text_primary)
+                                                .size(16.0),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(&record.original_name);
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} | {} | Track {}",
+                                            record.car, record.venue, record.track_id
+                                        ))
+                                        .color(theme.text_secondary),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} -> {} compressed | {} note{} | {}",
+                                            format_bytes(record.uncompressed_size),
+                                            format_bytes(record.compressed_size),
+                                            note_count,
+                                            if note_count == 1 { "" } else { "s" },
+                                            format_timestamp(record.imported_at)
+                                        ))
+                                        .small()
+                                        .color(theme.text_tertiary),
+                                    );
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .button(
+                                                egui::RichText::new("Delete").color(theme.danger),
+                                            )
+                                            .clicked()
+                                        {
+                                            delete_record = Some(record.id.clone());
+                                        }
+                                        if ui
+                                            .button(
+                                                egui::RichText::new("Open in Graphs")
+                                                    .color(theme.success),
+                                            )
+                                            .clicked()
+                                        {
+                                            open_record = Some(record.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                    ui.add_space(10.0);
+                }
+            });
+
+        if let Some(id) = delete_record {
+            match repository.remove_telemetry(&id) {
+                Ok(()) => self.simgit_status_message = Some("Telemetry removed.".to_owned()),
+                Err(error) => self.simgit_status_message = Some(error.to_string()),
+            }
+        }
+        if let Some(id) = open_record {
+            if let Err(error) = self.open_simgit_telemetry(&project, &id) {
+                self.simgit_status_message = Some(error);
+            }
+        }
+    }
+
+    fn prepare_simgit_analysis_builder(
+        &mut self,
+        repository: &mut crate::simgit::repository::SimGitRepository,
+        records: &[crate::simgit::repository::TelemetryRecord],
+    ) {
+        let defaults: Vec<_> = records
+            .iter()
+            .take(2)
+            .map(|record| record.id.clone())
+            .collect();
+        if defaults.is_empty() {
+            self.simgit_status_message =
+                Some("Import telemetry before starting analysis.".to_owned());
+            return;
+        }
+        for telemetry_id in &defaults {
+            if let Err(error) = repository.ensure_lap_summaries(telemetry_id) {
+                self.simgit_status_message = Some(error.to_string());
+                return;
+            }
+        }
+        let records = repository.telemetry();
+        let baseline = defaults[0].clone();
+        let reference = defaults.get(1).cloned().unwrap_or_else(|| baseline.clone());
+        self.simgit_analysis_draft.selected_telemetry = defaults.into_iter().collect();
+        self.simgit_analysis_draft.baseline_lap = records
+            .iter()
+            .find(|record| record.id == baseline)
+            .and_then(|record| record.fastest_lap())
+            .map(|lap| lap.lap_number);
+        self.simgit_analysis_draft.reference_lap = records
+            .iter()
+            .find(|record| record.id == reference)
+            .and_then(|record| record.fastest_lap())
+            .map(|lap| lap.lap_number);
+        self.simgit_analysis_draft.baseline_telemetry = Some(baseline);
+        self.simgit_analysis_draft.reference_telemetry = Some(reference);
+        self.show_simgit_analysis_builder = true;
+    }
+
+    fn draw_simgit_analysis_builder(&mut self, ctx: &egui::Context, theme: AppTheme) {
+        let Some(project) = self.simgit_manager.active_project.clone() else {
+            self.show_simgit_analysis_builder = false;
+            return;
+        };
+        let mut repository = match self.simgit_manager.repository(&project) {
+            Ok(repository) => repository,
+            Err(error) => {
+                self.simgit_status_message = Some(error.to_string());
+                self.show_simgit_analysis_builder = false;
+                return;
+            }
+        };
+        let mut records = repository.telemetry().to_vec();
+        records.sort_by_key(|record| std::cmp::Reverse(record.imported_at));
+        let mut window_open = self.show_simgit_analysis_builder;
+        let mut cancel = false;
+        let mut analyze = false;
+
+        egui::Window::new("Start Analysis Session")
+            .id(egui::Id::new("simgit_analysis_builder"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .default_width(760.0)
+            .max_width(900.0)
+            .collapsible(false)
+            .resizable(true)
+            .open(&mut window_open)
+            .frame(
+                egui::Frame::window(&ctx.global_style())
+                    .fill(theme.surface_panel)
+                    .stroke(egui::Stroke::new(1.0, theme.border_strong)),
+            )
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Choose every repository file to load, then set the initial baseline and reference laps.",
+                    )
+                    .color(theme.text_secondary),
+                );
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("Files in this analysis")
+                        .strong()
+                        .color(theme.text_primary),
+                );
+                egui::ScrollArea::vertical()
+                    .id_salt("simgit_analysis_files")
+                    .max_height(190.0)
+                    .show(ui, |ui| {
+                        for record in &mut records {
+                            let mut selected = self
+                                .simgit_analysis_draft
+                                .selected_telemetry
+                                .contains(&record.id);
+                            let response = ui.checkbox(
+                                &mut selected,
+                                format!(
+                                    "{} | {} | {}",
+                                    record.original_name, record.car, record.venue
+                                ),
+                            );
+                            if response.changed() {
+                                if selected {
+                                    match repository.ensure_lap_summaries(&record.id) {
+                                        Ok(laps) => {
+                                            record.laps = laps;
+                                            self.simgit_analysis_draft
+                                                .selected_telemetry
+                                                .insert(record.id.clone());
+                                        }
+                                        Err(error) => {
+                                            self.simgit_status_message = Some(error.to_string())
+                                        }
+                                    }
+                                } else {
+                                    self.simgit_analysis_draft
+                                        .selected_telemetry
+                                        .remove(&record.id);
+                                }
+                            }
+                        }
+                    });
+
+                normalize_analysis_draft(&mut self.simgit_analysis_draft, &records);
+                ui.add_space(14.0);
+                ui.columns(2, |columns| {
+                    draw_analysis_role(
+                        &mut columns[0],
+                        theme,
+                        "Baseline",
+                        "simgit_baseline_file",
+                        "simgit_baseline_lap",
+                        &records,
+                        &self.simgit_analysis_draft.selected_telemetry,
+                        &mut self.simgit_analysis_draft.baseline_telemetry,
+                        &mut self.simgit_analysis_draft.baseline_lap,
+                    );
+                    draw_analysis_role(
+                        &mut columns[1],
+                        theme,
+                        "Reference",
+                        "simgit_reference_file",
+                        "simgit_reference_lap",
+                        &records,
+                        &self.simgit_analysis_draft.selected_telemetry,
+                        &mut self.simgit_analysis_draft.reference_telemetry,
+                        &mut self.simgit_analysis_draft.reference_lap,
+                    );
+                });
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    let ready = analysis_draft_ready(&self.simgit_analysis_draft);
+                    if ui
+                        .add_enabled(
+                            ready,
+                            egui::Button::new(
+                                egui::RichText::new("Analyze")
+                                    .strong()
+                                    .color(theme.on_accent),
+                            )
+                            .fill(theme.accent)
+                            .min_size(egui::vec2(110.0, 32.0)),
+                        )
+                        .clicked()
+                    {
+                        analyze = true;
+                    }
+                });
+            });
+
+        if cancel || !window_open {
+            self.show_simgit_analysis_builder = false;
+        } else if analyze {
+            let selected: Vec<_> = records
+                .iter()
+                .filter(|record| {
+                    self.simgit_analysis_draft
+                        .selected_telemetry
+                        .contains(&record.id)
+                })
+                .map(|record| record.id.clone())
+                .collect();
+            let baseline_id = self.simgit_analysis_draft.baseline_telemetry.clone();
+            let reference_id = self.simgit_analysis_draft.reference_telemetry.clone();
+            if let (
+                Some(baseline_id),
+                Some(baseline_lap),
+                Some(reference_id),
+                Some(reference_lap),
+            ) = (
+                baseline_id,
+                self.simgit_analysis_draft.baseline_lap,
+                reference_id,
+                self.simgit_analysis_draft.reference_lap,
+            ) {
+                match self.start_simgit_analysis(
+                    &project,
+                    &selected,
+                    (&baseline_id, baseline_lap),
+                    (&reference_id, reference_lap),
+                ) {
+                    Ok(()) => self.show_simgit_analysis_builder = false,
+                    Err(error) => self.simgit_status_message = Some(error),
+                }
+            }
+        }
+    }
+
+    fn draw_simgit_team_notes(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
+        ui.heading(
+            egui::RichText::new("Team Analysis Notes")
+                .color(theme.text_primary)
+                .size(25.0),
+        );
+        ui.label(
+            egui::RichText::new(
+                "Notes are anchored to telemetry time, lap, viewport, and worksheet.",
+            )
+            .color(theme.text_secondary),
+        );
+        ui.add_space(16.0);
+
+        let Some(project) = self.simgit_manager.active_project.clone() else {
+            draw_empty_repository(ui, theme, "Select a repository to view its notes.");
+            return;
+        };
+        let mut repository = match self.simgit_manager.repository(&project) {
+            Ok(repository) => repository,
+            Err(error) => {
+                draw_empty_repository(ui, theme, &error.to_string());
+                return;
+            }
+        };
+        let mut notes = repository.notes().to_vec();
+        notes.sort_by_key(|note| std::cmp::Reverse(note.created_at));
+        if notes.is_empty() {
+            draw_empty_repository(
+                ui,
+                theme,
+                "Open repository telemetry and use the Graphs NOTES drawer to add analysis.",
+            );
+            return;
+        }
+
+        let mut open_note = None;
+        let mut delete_note = None;
+        egui::ScrollArea::vertical()
+            .id_salt("simgit_team_notes")
+            .show(ui, |ui| {
+                for note in &notes {
+                    let file_name = repository
+                        .telemetry()
+                        .iter()
+                        .find(|record| record.id == note.telemetry_id)
+                        .map(|record| record.original_name.as_str())
+                        .unwrap_or("Unknown telemetry");
+                    egui::Frame::NONE
+                        .fill(theme.surface_card)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(8.0)
+                        .inner_margin(14.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (tag_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(14.0, 14.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    tag_rect,
+                                    4.0,
+                                    note.color.display_color(theme.is_dark),
+                                );
+                                ui.label(
+                                    egui::RichText::new(&note.author)
+                                        .strong()
+                                        .color(theme.accent_text),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} | {} | {}",
+                                        file_name,
+                                        format_context(note),
+                                        format_timestamp(note.created_at)
+                                    ))
+                                    .small()
+                                    .color(theme.text_tertiary),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .button(
+                                                egui::RichText::new("Delete").color(theme.danger),
+                                            )
+                                            .clicked()
+                                        {
+                                            delete_note = Some(note.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(6.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&note.body).color(theme.text_primary),
+                                )
+                                .wrap(),
+                            );
+                            for (role, reference) in [
+                                ("Cyan", note.context.cyan_reference.as_ref()),
+                                ("Secondary", note.context.secondary_reference.as_ref()),
+                            ] {
+                                if let Some(reference) = reference {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{role} reference: {} / Lap {}",
+                                            reference.file_name, reference.lap_number
+                                        ))
+                                        .small()
+                                        .color(theme.text_tertiary),
+                                    );
+                                }
+                            }
+                            if ui.button("Open context in Graphs").clicked() {
+                                open_note = Some(note.clone());
+                            }
+                        });
+                    ui.add_space(10.0);
+                }
+            });
+        if let Some(note_id) = delete_note {
+            match repository.remove_note(&note_id) {
+                Ok(()) => {
+                    self.simgit_status_message = Some("Analysis note deleted.".to_owned());
+                    if let Some(note) = notes.iter().find(|note| note.id == note_id) {
+                        let source = crate::simgit::repository::RepositoryRecordRef {
+                            project: project.clone(),
+                            telemetry_id: note.telemetry_id.clone(),
+                        };
+                        let _ = self.refresh_simgit_note_cache(&source);
+                    }
+                }
+                Err(error) => self.simgit_status_message = Some(error.to_string()),
+            }
+        }
+        if let Some(note) = open_note {
+            self.open_simgit_note(&project, &note);
+        }
+    }
+
+    fn open_simgit_note(&mut self, project: &str, note: &AnalysisNote) {
+        if let Err(error) = self.open_simgit_note_context(project, note) {
+            self.simgit_status_message = Some(error);
+        }
+    }
+
+    fn draw_simgit_sync_status(&mut self, ui: &mut egui::Ui, theme: AppTheme) {
+        ui.heading(
+            egui::RichText::new("Sync Foundation")
+                .color(theme.text_primary)
+                .size(25.0),
+        );
+        ui.label(
+            egui::RichText::new(
+                "Supabase transport is not enabled in this MVP. Repository objects are already prepared for it.",
+            )
+            .color(theme.text_secondary),
+        );
+        ui.add_space(18.0);
+        for (title, detail) in [
+            (
+                "Compressed objects",
+                "Each IBT is stored once as a Zstandard object.",
+            ),
+            (
+                "Stable identity",
+                "BLAKE3 IDs make uploads and downloads safely deduplicated.",
+            ),
+            (
+                "Portable metadata",
+                "Repository records and contextual notes use a versioned JSON manifest.",
+            ),
+            (
+                "Verified downloads",
+                "Received objects are decompressed and hash-checked before analysis.",
+            ),
+        ] {
+            egui::Frame::NONE
+                .fill(theme.surface_card)
+                .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                .corner_radius(8.0)
+                .inner_margin(14.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(title)
+                            .strong()
+                            .color(theme.text_primary),
+                    );
+                    ui.label(egui::RichText::new(detail).color(theme.text_secondary));
+                });
+            ui.add_space(8.0);
+        }
+    }
+}
+
+fn draw_empty_repository(ui: &mut egui::Ui, theme: AppTheme, message: &str) {
+    egui::Frame::NONE
+        .fill(theme.surface_panel)
+        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+        .corner_radius(9.0)
+        .inner_margin(18.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(egui::RichText::new(message).color(theme.text_secondary)).wrap(),
+            );
+        });
+}
+
+fn format_import_summary(summary: &ImportBatchSummary) -> String {
+    let mut message = format!(
+        "Imported {} file(s); {} duplicate(s) reused.",
+        summary.imported, summary.already_present
+    );
+    if !summary.failures.is_empty() {
+        message.push_str(&format!(
+            " {} failed: {}",
+            summary.failures.len(),
+            summary.failures.join(" | ")
+        ));
+    }
+    message
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes / KIB)
+    } else {
+        format!("{bytes:.0} B")
+    }
+}
+
+fn format_timestamp(timestamp: i64) -> String {
+    chrono::DateTime::from_timestamp(timestamp, 0)
+        .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "Unknown time".to_owned())
+}
+
+fn format_context(note: &AnalysisNote) -> String {
+    let time = note
+        .context
+        .cursor_seconds
+        .map(|seconds| format!("{seconds:.3}s"))
+        .unwrap_or_else(|| "No cursor".to_owned());
+    let lap = note
+        .context
+        .lap_number
+        .map(|lap| format!("Lap {lap}"))
+        .unwrap_or_else(|| "No lap".to_owned());
+    format!("{} | {} | {}", note.context.worksheet, lap, time)
+}
+
+fn normalize_analysis_draft(
+    draft: &mut crate::SimGitAnalysisDraft,
+    records: &[crate::simgit::repository::TelemetryRecord],
+) {
+    draft
+        .selected_telemetry
+        .retain(|telemetry_id| records.iter().any(|record| record.id == *telemetry_id));
+    normalize_analysis_role(
+        records,
+        &draft.selected_telemetry,
+        &mut draft.baseline_telemetry,
+        &mut draft.baseline_lap,
+    );
+    normalize_analysis_role(
+        records,
+        &draft.selected_telemetry,
+        &mut draft.reference_telemetry,
+        &mut draft.reference_lap,
+    );
+}
+
+fn normalize_analysis_role(
+    records: &[crate::simgit::repository::TelemetryRecord],
+    selected: &std::collections::HashSet<String>,
+    telemetry_id: &mut Option<String>,
+    lap_number: &mut Option<i32>,
+) {
+    let current_is_selected = telemetry_id
+        .as_ref()
+        .is_some_and(|id| selected.contains(id));
+    if !current_is_selected {
+        *telemetry_id = records
+            .iter()
+            .find(|record| selected.contains(&record.id))
+            .map(|record| record.id.clone());
+        *lap_number = None;
+    }
+    let Some(record) = telemetry_id
+        .as_ref()
+        .and_then(|id| records.iter().find(|record| record.id == *id))
+    else {
+        *lap_number = None;
+        return;
+    };
+    let lap_is_valid =
+        lap_number.is_some_and(|lap| record.laps.iter().any(|summary| summary.lap_number == lap));
+    if !lap_is_valid {
+        *lap_number = record.fastest_lap().map(|lap| lap.lap_number);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_analysis_role(
+    ui: &mut egui::Ui,
+    theme: AppTheme,
+    title: &str,
+    file_combo_id: &str,
+    lap_combo_id: &str,
+    records: &[crate::simgit::repository::TelemetryRecord],
+    selected: &std::collections::HashSet<String>,
+    telemetry_id: &mut Option<String>,
+    lap_number: &mut Option<i32>,
+) {
+    ui.label(
+        egui::RichText::new(title)
+            .strong()
+            .size(16.0)
+            .color(theme.text_primary),
+    );
+    ui.add_space(5.0);
+    let selected_name = telemetry_id
+        .as_ref()
+        .and_then(|id| records.iter().find(|record| record.id == *id))
+        .map(|record| record.original_name.as_str())
+        .unwrap_or("Select file");
+    let previous_id = telemetry_id.clone();
+    egui::ComboBox::from_id_salt(file_combo_id)
+        .width(ui.available_width())
+        .selected_text(selected_name)
+        .show_ui(ui, |ui| {
+            for record in records
+                .iter()
+                .filter(|record| selected.contains(&record.id))
+            {
+                ui.selectable_value(telemetry_id, Some(record.id.clone()), &record.original_name);
+            }
+        });
+    if *telemetry_id != previous_id {
+        *lap_number = telemetry_id
+            .as_ref()
+            .and_then(|id| records.iter().find(|record| record.id == *id))
+            .and_then(|record| record.fastest_lap())
+            .map(|lap| lap.lap_number);
+    }
+    let selected_record = telemetry_id
+        .as_ref()
+        .and_then(|id| records.iter().find(|record| record.id == *id));
+    let selected_lap_text = lap_number
+        .and_then(|number| {
+            selected_record.and_then(|record| {
+                record
+                    .laps
+                    .iter()
+                    .find(|lap| lap.lap_number == number)
+                    .map(|lap| format!("Lap {} | {:.3}s", lap.lap_number, lap.duration_seconds))
+            })
+        })
+        .unwrap_or_else(|| "Select lap".to_owned());
+    egui::ComboBox::from_id_salt(lap_combo_id)
+        .width(ui.available_width())
+        .selected_text(selected_lap_text)
+        .show_ui(ui, |ui| {
+            if let Some(record) = selected_record {
+                for lap in &record.laps {
+                    ui.selectable_value(
+                        lap_number,
+                        Some(lap.lap_number),
+                        format!("Lap {} | {:.3}s", lap.lap_number, lap.duration_seconds),
+                    );
+                }
+            }
+        });
+}
+
+fn analysis_draft_ready(draft: &crate::SimGitAnalysisDraft) -> bool {
+    let baseline_ready = draft
+        .baseline_telemetry
+        .as_ref()
+        .is_some_and(|id| draft.selected_telemetry.contains(id) && draft.baseline_lap.is_some());
+    let reference_ready = draft
+        .reference_telemetry
+        .as_ref()
+        .is_some_and(|id| draft.selected_telemetry.contains(id) && draft.reference_lap.is_some());
+    baseline_ready && reference_ready
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{analysis_draft_ready, normalize_analysis_draft};
+    use crate::simgit::repository::{LapSummary, TelemetryRecord};
+
+    fn record(id: &str, laps: &[(i32, f64)]) -> TelemetryRecord {
+        TelemetryRecord {
+            id: id.to_owned(),
+            original_name: format!("{id}.ibt"),
+            object_name: format!("{id}.ibt.zst"),
+            imported_at: 1,
+            uncompressed_size: 100,
+            compressed_size: 50,
+            car: "GT3".to_owned(),
+            venue: "Spa".to_owned(),
+            track_id: 1,
+            laps: laps
+                .iter()
+                .map(|(lap_number, duration_seconds)| LapSummary {
+                    lap_number: *lap_number,
+                    duration_seconds: *duration_seconds,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn analysis_defaults_each_role_to_the_selected_files_fastest_lap() {
+        let records = [
+            record("baseline", &[(2, 91.0), (3, 89.5)]),
+            record("reference", &[(4, 90.0), (5, 88.8)]),
+        ];
+        let mut draft = crate::SimGitAnalysisDraft::default();
+        draft.selected_telemetry = ["baseline".to_owned(), "reference".to_owned()]
+            .into_iter()
+            .collect();
+        draft.baseline_telemetry = Some("baseline".to_owned());
+        draft.reference_telemetry = Some("reference".to_owned());
+
+        normalize_analysis_draft(&mut draft, &records);
+
+        assert_eq!(draft.baseline_lap, Some(3));
+        assert_eq!(draft.reference_lap, Some(5));
+        assert!(analysis_draft_ready(&draft));
+    }
+
+    #[test]
+    fn removing_a_role_file_falls_back_to_a_remaining_selection() {
+        let records = [
+            record("baseline", &[(2, 91.0)]),
+            record("reference", &[(5, 88.8)]),
+        ];
+        let mut draft = crate::SimGitAnalysisDraft::default();
+        draft.selected_telemetry.insert("reference".to_owned());
+        draft.baseline_telemetry = Some("baseline".to_owned());
+        draft.baseline_lap = Some(2);
+
+        normalize_analysis_draft(&mut draft, &records);
+
+        assert_eq!(draft.baseline_telemetry.as_deref(), Some("reference"));
+        assert_eq!(draft.baseline_lap, Some(5));
     }
 }

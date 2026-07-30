@@ -1,5 +1,7 @@
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
+
+use super::repository::{RepositoryError, SimGitRepository};
 
 #[derive(Debug, Clone)]
 pub struct SimGitManager {
@@ -9,62 +11,60 @@ pub struct SimGitManager {
 
 impl SimGitManager {
     pub fn new(root_dir: PathBuf) -> Self {
-        if !root_dir.exists() {
-            let _ = fs::create_dir_all(&root_dir);
-        }
+        let _ = fs::create_dir_all(&root_dir);
+        let active_project = fs::read_to_string(root_dir.join(".active_repository"))
+            .ok()
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty() && root_dir.join(name).is_dir());
         Self {
             root_dir,
-            active_project: None,
+            active_project,
         }
     }
 
-    pub fn set_active_project(&mut self, project_name: &str) {
-        self.active_project = Some(project_name.to_string());
+    pub fn set_active_project(&mut self, project_name: &str) -> Result<(), RepositoryError> {
+        let repository = SimGitRepository::open(&self.root_dir, project_name)?;
+        fs::write(
+            self.root_dir.join(".active_repository"),
+            repository.name().as_bytes(),
+        )?;
+        self.active_project = Some(repository.name().to_owned());
+        Ok(())
     }
 
-    pub fn create_project(&self, project_name: &str) -> Result<(), std::io::Error> {
-        let proj_dir = self.root_dir.join(project_name);
-        fs::create_dir_all(&proj_dir)?;
-        fs::create_dir_all(proj_dir.join("telemetry"))?;
-        fs::create_dir_all(proj_dir.join("setups"))?;
-        fs::create_dir_all(proj_dir.join("lapfiles"))?;
-        fs::create_dir_all(proj_dir.join("exports"))?;
-        fs::create_dir_all(proj_dir.join("reports"))?;
-        Ok(())
+    pub fn create_project(&mut self, project_name: &str) -> Result<(), RepositoryError> {
+        let repository = SimGitRepository::create(&self.root_dir, project_name)?;
+        self.set_active_project(repository.name())
+    }
+
+    pub fn active_repository(&self) -> Result<SimGitRepository, RepositoryError> {
+        let name = self
+            .active_project
+            .as_deref()
+            .ok_or(RepositoryError::InvalidName)?;
+        SimGitRepository::open(&self.root_dir, name)
+    }
+
+    pub fn repository(&self, project_name: &str) -> Result<SimGitRepository, RepositoryError> {
+        SimGitRepository::open(&self.root_dir, project_name)
     }
 
     pub fn list_projects(&self) -> Vec<String> {
         let mut projects = Vec::new();
         if let Ok(entries) = fs::read_dir(&self.root_dir) {
             for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_dir() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            projects.push(name.to_string());
-                        }
+                if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                    if let Some(name) = entry.file_name().to_str() {
+                        projects.push(name.to_owned());
                     }
                 }
             }
         }
-        projects.sort();
+        projects.sort_unstable();
         projects
     }
 
-    pub fn list_setups(&self) -> Vec<PathBuf> {
-        let mut setups = Vec::new();
-        if let Some(ref proj) = self.active_project {
-            let setups_dir = self.root_dir.join(proj).join("setups");
-            if let Ok(entries) = fs::read_dir(&setups_dir) {
-                for entry in entries.flatten() {
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file() {
-                            setups.push(entry.path());
-                        }
-                    }
-                }
-            }
-        }
-        setups.sort();
-        setups
+    pub fn root(&self) -> &Path {
+        &self.root_dir
     }
 }

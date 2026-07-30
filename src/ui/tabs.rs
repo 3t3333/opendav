@@ -101,12 +101,14 @@ impl OpenDavApp {
                             .min_size(egui::vec2(220.0, 50.0));
                         
                         if ui.add(browse_btn).clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
+                            if let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("iRacing Telemetry", &["ibt"])
-                                .set_title("Select Telemetry File")
-                                .pick_file() 
+                                .set_title("Select Telemetry Files")
+                                .pick_files()
                             {
-                                self.load_telemetry_file(path.as_path());
+                                for path in paths {
+                                    self.load_telemetry_file(path.as_path());
+                                }
                             }
                         }
 
@@ -495,7 +497,7 @@ impl OpenDavApp {
         }
 
         // 1. HORIZONTAL MOTEC WORKSHEET TABS AT THE TOP!
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let tab_style = ui.style_mut();
             tab_style.spacing.button_padding = egui::vec2(12.0, 8.0); // Perfect, professional tab sizing
 
@@ -508,6 +510,16 @@ impl OpenDavApp {
                 &mut self.active_worksheet,
                 WorksheetTab::Vehicle,
                 "2. Vehicle",
+            );
+            ui.selectable_value(
+                &mut self.active_worksheet,
+                WorksheetTab::Tyre,
+                "3. Tyre",
+            );
+            ui.selectable_value(
+                &mut self.active_worksheet,
+                WorksheetTab::Shocks,
+                "4. Shocks",
             );
         });
 
@@ -535,6 +547,8 @@ impl OpenDavApp {
         let config = match self.active_worksheet {
             WorksheetTab::Driver => Some(WorksheetConfig::driver(theme)),
             WorksheetTab::Vehicle => Some(WorksheetConfig::vehicle(theme)),
+            WorksheetTab::Tyre => Some(WorksheetConfig::tyre(theme)),
+            WorksheetTab::Shocks => Some(WorksheetConfig::shocks(theme)),
             _ => None,
         };
 
@@ -543,6 +557,8 @@ impl OpenDavApp {
                 let canvas_id = match self.active_worksheet {
                     WorksheetTab::Driver => "basic_worksheet_canvas",
                     WorksheetTab::Vehicle => "basic_vehicle_worksheet_canvas",
+                    WorksheetTab::Tyre => "tyre_worksheet_canvas",
+                    WorksheetTab::Shocks => "shocks_worksheet_canvas",
                     _ => "custom_worksheet_canvas",
                 };
                 self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);

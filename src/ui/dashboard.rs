@@ -118,6 +118,7 @@ impl OpenDavApp {
                     let tab_configs = [
                         (crate::GraphsSidebarTab::Details, "DETAILS"),
                         (crate::GraphsSidebarTab::Values, "VALUES"),
+                        (crate::GraphsSidebarTab::Notes, "NOTES"),
                     ];
 
                     for (tab_type, label_text) in tab_configs {
@@ -269,6 +270,9 @@ impl OpenDavApp {
                             }
                             crate::GraphsSidebarTab::Values => {
                                 self.draw_values_sidebar_content(ui, is_dark)
+                            }
+                            crate::GraphsSidebarTab::Notes => {
+                                self.draw_notes_sidebar_content(ui, is_dark)
                             }
                         }
                     });
@@ -440,8 +444,6 @@ impl OpenDavApp {
 
             ui.add_space(15.0);
 
-            #[cfg(feature = "dev_tools")]
-            {
                 let simgit_bytes = include_bytes!("../../assets/button_simgit.png");
                 let is_simgit_selected = self.active_page == ActivePage::SimGit;
                 let simgit =
@@ -476,7 +478,6 @@ impl OpenDavApp {
                 }
 
                 ui.add_space(15.0);
-            }
         });
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -531,15 +532,28 @@ impl OpenDavApp {
         let theme = AppTheme::for_mode(is_dark);
         ui.vertical(|ui| {
             ui.add_space(5.0);
+            let from_simgit = self
+                .sessions
+                .get(self.primary_session_idx)
+                .and_then(|session| session.repository_record.as_ref())
+                .is_some();
             if ui
                 .button(
-                    egui::RichText::new("⬅  Back to OpenDAV")
+                    egui::RichText::new(if from_simgit {
+                        "⬅  Back to SimGit"
+                    } else {
+                        "⬅  Back to OpenDAV"
+                    })
                         .strong()
                         .color(theme.accent_text),
                 )
                 .clicked()
             {
-                self.active_page = ActivePage::OpenDav;
+                self.active_page = if from_simgit {
+                    ActivePage::SimGit
+                } else {
+                    ActivePage::OpenDav
+                };
             }
             ui.add_space(10.0);
             ui.separator();
@@ -1165,6 +1179,327 @@ impl OpenDavApp {
         });
     }
 
+    fn draw_notes_sidebar_content(&mut self, ui: &mut egui::Ui, is_dark: bool) {
+        let theme = AppTheme::for_mode(is_dark);
+        ui.heading(
+            egui::RichText::new("Analysis Notes")
+                .color(theme.text_primary)
+                .size(19.0),
+        );
+        ui.label(
+            egui::RichText::new("Anchor team feedback to the telemetry currently in view.")
+                .small()
+                .color(theme.text_secondary),
+        );
+        if let Some(message) = &self.simgit_status_message {
+            ui.add_space(6.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(message)
+                        .small()
+                        .color(theme.text_tertiary),
+                )
+                .wrap(),
+            );
+        }
+        ui.add_space(12.0);
+
+        if self.simgit_import_receiver.is_some() {
+            ui.label(
+                egui::RichText::new("Repository import is in progress. Notes will unlock when it completes.")
+                    .color(theme.warning),
+            );
+            return;
+        }
+
+        if self.sessions.is_empty() || self.primary_session_idx >= self.sessions.len() {
+            ui.label(
+                egui::RichText::new("Load repository telemetry to add notes.")
+                    .color(theme.text_tertiary),
+            );
+            return;
+        }
+        let Some(source) = self.sessions[self.primary_session_idx]
+            .repository_record
+            .clone()
+        else {
+            egui::Frame::NONE
+                .fill(theme.surface_card)
+                .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                .corner_radius(6.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "This file is not linked to SimGit. Import it into a repository, then open that repository copy in Graphs.",
+                            )
+                            .color(theme.text_secondary),
+                        )
+                        .wrap(),
+                    );
+                    if ui.button("Open SimGit").clicked() {
+                        self.active_page = ActivePage::SimGit;
+                    }
+                });
+            return;
+        };
+
+        let mut repository = match self.simgit_manager.repository(&source.project) {
+            Ok(repository) => repository,
+            Err(error) => {
+                ui.label(egui::RichText::new(error.to_string()).color(theme.danger));
+                return;
+            }
+        };
+        let record_name = repository
+            .telemetry()
+            .iter()
+            .find(|record| record.id == source.telemetry_id)
+            .map(|record| record.original_name.clone())
+            .unwrap_or_else(|| self.sessions[self.primary_session_idx].file_name.clone());
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!("{} / {}", source.project, record_name))
+                    .strong()
+                    .color(theme.accent_text),
+            )
+            .truncate(),
+        )
+        .on_hover_text(record_name);
+        ui.add_space(10.0);
+
+        egui::Frame::NONE
+            .fill(theme.surface_card)
+            .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+            .corner_radius(6.0)
+            .inner_margin(9.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} | {} | {}",
+                        worksheet_label(self.active_worksheet),
+                        self.selected_lap
+                            .map(|(_, lap)| format!("Lap {lap}"))
+                            .unwrap_or_else(|| "No lap".to_owned()),
+                        self.cursor_x
+                            .map(|time| format!("{time:.3}s"))
+                            .unwrap_or_else(|| "No cursor".to_owned())
+                    ))
+                    .small()
+                    .color(theme.text_secondary),
+                );
+                if let Some((start, end)) = self.visible_x_range {
+                    ui.label(
+                        egui::RichText::new(format!("Viewport {start:.3}s - {end:.3}s"))
+                            .small()
+                            .color(theme.text_tertiary),
+                    );
+                }
+                for (label, selection) in [
+                    ("Cyan", self.ref_lap_cyan),
+                    ("Secondary", self.ref_lap_white),
+                ] {
+                    if let Some((session_index, lap)) = selection {
+                        if let Some(session) = self.sessions.get(session_index) {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{label} reference: {} / Lap {lap}",
+                                    session.file_name
+                                ))
+                                .small()
+                                .color(theme.text_tertiary),
+                            );
+                        }
+                    }
+                }
+            });
+
+        ui.add_space(10.0);
+        ui.checkbox(
+            &mut self.show_simgit_note_zones,
+            "Show color-coded context zones",
+        );
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new("Color tag")
+                .strong()
+                .color(theme.text_primary),
+        );
+        ui.horizontal(|ui| {
+            for color in crate::simgit::repository::NoteColor::ALL {
+                let selected = self.simgit_note_color == color;
+                let fill = color.display_color(is_dark);
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(27.0, 22.0), egui::Sense::click());
+                ui.painter().rect_filled(rect, 6.0, fill);
+                if selected || response.hovered() {
+                    ui.painter().rect_stroke(
+                        rect,
+                        6.0,
+                        egui::Stroke::new(
+                            if selected { 2.5 } else { 1.5 },
+                            if selected {
+                                theme.text_primary
+                            } else {
+                                theme.border_strong
+                            },
+                        ),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if response.on_hover_text(color.label()).clicked() {
+                    self.simgit_note_color = color;
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.simgit_note_author)
+                .hint_text("Author")
+                .desired_width(f32::INFINITY),
+        );
+        ui.add_space(6.0);
+        ui.add_sized(
+            [ui.available_width(), 92.0],
+            egui::TextEdit::multiline(&mut self.simgit_note_draft)
+                .hint_text("What did you notice here?"),
+        );
+        let can_submit = !self.simgit_note_draft.trim().is_empty();
+        if ui
+            .add_enabled(
+                can_submit,
+                egui::Button::new(
+                    egui::RichText::new("Add Note").strong().color(theme.on_accent),
+                )
+                .fill(theme.accent),
+            )
+            .clicked()
+        {
+            let context = crate::simgit::repository::AnalysisContext {
+                cursor_seconds: self.cursor_x,
+                viewport: self.visible_x_range,
+                lap_number: self.selected_lap.map(|(_, lap)| lap),
+                worksheet: worksheet_label(self.active_worksheet).to_owned(),
+                cyan_reference: capture_reference_context(&self.sessions, self.ref_lap_cyan),
+                secondary_reference: capture_reference_context(
+                    &self.sessions,
+                    self.ref_lap_white,
+                ),
+            };
+            match repository.add_note(
+                &source.telemetry_id,
+                &self.simgit_note_author,
+                &self.simgit_note_draft,
+                self.simgit_note_color,
+                context,
+            ) {
+                Ok(_) => {
+                    self.simgit_note_draft.clear();
+                    self.simgit_status_message = Some("Analysis note saved locally.".to_owned());
+                    let _ = self.refresh_simgit_note_cache(&source);
+                }
+                Err(error) => self.simgit_status_message = Some(error.to_string()),
+            }
+        }
+
+        ui.add_space(14.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "{} saved note(s)",
+                repository.notes_for(&source.telemetry_id).len()
+            ))
+            .strong()
+            .color(theme.text_primary),
+        );
+
+        let notes: Vec<_> = repository
+            .notes_for(&source.telemetry_id)
+            .into_iter()
+            .cloned()
+            .collect();
+        let mut jump_to = None;
+        let mut delete_note = None;
+        egui::ScrollArea::vertical()
+            .id_salt("graphs_analysis_notes")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for note in &notes {
+                    egui::Frame::NONE
+                        .fill(theme.surface_card)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(6.0)
+                        .inner_margin(9.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let (tag_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(13.0, 13.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    tag_rect,
+                                    4.0,
+                                    note.color.display_color(is_dark),
+                                );
+                                ui.label(
+                                    egui::RichText::new(&note.author)
+                                        .strong()
+                                        .color(theme.accent_text),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button("Delete").clicked() {
+                                            delete_note = Some(note.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&note.body).color(theme.text_primary),
+                                )
+                                .wrap(),
+                            );
+                            for (role, reference) in [
+                                ("Cyan", note.context.cyan_reference.as_ref()),
+                                ("Secondary", note.context.secondary_reference.as_ref()),
+                            ] {
+                                if let Some(reference) = reference {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{role} reference: {} / Lap {}",
+                                            reference.file_name, reference.lap_number
+                                        ))
+                                        .small()
+                                        .color(theme.text_tertiary),
+                                    );
+                                }
+                            }
+                            if ui.small_button("Jump to context").clicked() {
+                                jump_to = Some(note.clone());
+                            }
+                        });
+                    ui.add_space(7.0);
+                }
+            });
+
+        if let Some(note_id) = delete_note {
+            if let Err(error) = repository.remove_note(&note_id) {
+                self.simgit_status_message = Some(error.to_string());
+            } else {
+                let _ = self.refresh_simgit_note_cache(&source);
+            }
+        }
+        if let Some(note) = jump_to {
+            if let Err(error) = self.open_simgit_note_context(&source.project, &note) {
+                self.simgit_status_message = Some(error);
+            }
+        }
+    }
+
     pub fn draw_top_panel(&mut self, ctx: &egui::Context) {
         let is_dark = ctx.style().visuals.dark_mode;
         let theme = AppTheme::for_mode(is_dark);
@@ -1173,12 +1508,14 @@ impl OpenDavApp {
             ui.add_space(6.0);
             egui::menu::bar(ui, |ui| {
                 if ui.button("Load IBT Telemetry").clicked() {
-                    if let Some(path) = FileDialog::new()
+                    if let Some(paths) = FileDialog::new()
                         .add_filter("iRacing Telemetry", &["ibt"])
-                        .set_title("Select Telemetry File")
-                        .pick_file() 
+                        .set_title("Select Telemetry Files")
+                        .pick_files()
                     {
-                        self.load_telemetry_file(path.as_path());
+                        for path in paths {
+                            self.load_telemetry_file(path.as_path());
+                        }
                     }
                 }
 
@@ -1350,6 +1687,39 @@ impl OpenDavApp {
     }
 }
 
+fn capture_reference_context(
+    sessions: &[crate::LoadedSession],
+    selection: Option<(usize, i32)>,
+) -> Option<crate::simgit::repository::ReferenceLapContext> {
+    let (session_index, lap_number) = selection?;
+    let session = sessions.get(session_index)?;
+    Some(crate::simgit::repository::ReferenceLapContext {
+        file_name: session.file_name.clone(),
+        repository_record: session.repository_record.clone(),
+        lap_number,
+    })
+}
+
+fn worksheet_label(tab: crate::config::worksheet::WorksheetTab) -> &'static str {
+    use crate::config::worksheet::WorksheetTab;
+    match tab {
+        WorksheetTab::Driver => "Driver",
+        WorksheetTab::Vehicle => "Vehicle",
+        WorksheetTab::Tyre => "Tyre",
+        WorksheetTab::Shocks => "Shocks",
+        WorksheetTab::TireEnergy => "Tire Energy",
+        WorksheetTab::TireFuelWindows => "Tire & Fuel",
+        WorksheetTab::TireTempLoad => "Tire Temp/Load",
+        WorksheetTab::MathSandbox => "Math Sandbox",
+        WorksheetTab::EmpiricalAero => "Empirical Aero",
+        WorksheetTab::DownforceMapping => "Downforce Mapping",
+        WorksheetTab::PitchPlatform => "Pitch & Platform",
+        WorksheetTab::HandlingAnalyzer => "Handling Analyzer",
+        WorksheetTab::TlltdDistribution => "TLLTD Distribution",
+        WorksheetTab::CompressionRates => "Compression Rates",
+    }
+}
+
 fn format_channel_unit_val(
     name: &str,
     raw_val: f64,
@@ -1394,6 +1764,12 @@ fn format_channel_unit_val(
                 raw_val * 0.145038
             };
             (format!("{:.1}", psi), "psi".to_string())
+        }
+    } else if u_lower == "m" && name_lower.contains("shock") && name_lower.contains("defl") {
+        if use_metric {
+            (format!("{:.2}", raw_val * 1000.0), "mm".to_string())
+        } else {
+            (format!("{:.3}", raw_val * 39.3701), "in".to_string())
         }
     } else if u_lower == "mm"
         || (u_lower == "m"

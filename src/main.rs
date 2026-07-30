@@ -28,6 +28,7 @@ pub enum ActivePage {
 pub enum GraphsSidebarTab {
     Details,
     Values,
+    Notes,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -43,6 +44,15 @@ pub enum ReportsTab {
     TimingGraphs,
 }
 
+#[derive(Default)]
+pub struct SimGitAnalysisDraft {
+    pub selected_telemetry: std::collections::HashSet<String>,
+    pub baseline_telemetry: Option<String>,
+    pub baseline_lap: Option<i32>,
+    pub reference_telemetry: Option<String>,
+    pub reference_lap: Option<i32>,
+}
+
 #[derive(Clone, Debug)]
 pub enum AppState {
     Splash { progress: f32 },
@@ -51,6 +61,7 @@ pub enum AppState {
 
 pub struct LoadedSession {
     pub file_name: String,
+    pub repository_record: Option<crate::simgit::repository::RepositoryRecordRef>,
     pub session: crate::data::ibt_parser::IbtSession,
     pub track_bounds: Option<(f64, f64, f64, f64)>,
     
@@ -73,6 +84,8 @@ pub struct LoadedSession {
     pub clutch_pts_cache: Vec<[f64; 2]>,
     pub distance_delta_pts_cache: Vec<[f64; 2]>,
     pub time_delta_pts_cache: Vec<[f64; 2]>,
+    pub worksheet_channel_pts_cache:
+        std::collections::HashMap<crate::config::worksheet::CacheSelector, Vec<[f64; 2]>>,
 
     // Precomputed Lap boundary start/end time markers (relative to stint start in seconds)
     pub lap_ranges: Vec<(i32, f64, f64)>,
@@ -171,16 +184,23 @@ pub struct OpenDavApp {
 
     // SimGit State
     pub simgit_manager: crate::simgit::manager::SimGitManager,
-    pub simgit_prev_setup: Option<std::path::PathBuf>,
-    pub simgit_new_setup: Option<std::path::PathBuf>,
-    pub simgit_diff: Option<crate::simgit::diff::SetupDiff>,
     pub simgit_active_tab: SimGitTab,
     pub simgit_new_ws_name: String,
     pub show_new_ws_popup: bool,
+    pub simgit_note_draft: String,
+    pub simgit_note_author: String,
+    pub simgit_note_color: crate::simgit::repository::NoteColor,
+    pub show_simgit_note_zones: bool,
+    pub simgit_notes_cache: std::collections::HashMap<
+        crate::simgit::repository::RepositoryRecordRef,
+        Vec<crate::simgit::repository::AnalysisNote>,
+    >,
+    pub simgit_status_message: Option<String>,
+    pub simgit_import_receiver:
+        Option<std::sync::mpsc::Receiver<crate::simgit::repository::ImportBatchSummary>>,
+    pub show_simgit_analysis_builder: bool,
+    pub simgit_analysis_draft: SimGitAnalysisDraft,
     
-    // Cached JSON track map segments for SimGit Dashboard Cards
-    pub simgit_track_maps: std::collections::HashMap<i32, Vec<Vec<[f64; 2]>>>,
-
     // Application Settings
     pub settings: crate::config::settings::AppSettings,
 
@@ -241,13 +261,18 @@ impl Default for OpenDavApp {
             simgit_manager: crate::simgit::manager::SimGitManager::new(std::path::PathBuf::from(
                 "workspace",
             )),
-            simgit_prev_setup: None,
-            simgit_new_setup: None,
-            simgit_diff: None,
             simgit_active_tab: SimGitTab::Dashboard,
             simgit_new_ws_name: String::new(),
             show_new_ws_popup: false,
-            simgit_track_maps: std::collections::HashMap::new(),
+            simgit_note_draft: String::new(),
+            simgit_note_author: "Driver".to_owned(),
+            simgit_note_color: crate::simgit::repository::NoteColor::Blue,
+            show_simgit_note_zones: true,
+            simgit_notes_cache: std::collections::HashMap::new(),
+            simgit_status_message: None,
+            simgit_import_receiver: None,
+            show_simgit_analysis_builder: false,
+            simgit_analysis_draft: SimGitAnalysisDraft::default(),
             settings: crate::config::settings::AppSettings::default(),
             
             #[cfg(feature = "dev_tools")]
@@ -832,6 +857,13 @@ impl LoadedSession {
                 track_bounds = Some((min_lon, min_lat, max_lon, max_lat));
             }
 
+            let worksheet_channel_pts_cache =
+                crate::signals::worksheet_channels::build_worksheet_channel_caches(
+                    &session,
+                    &speed,
+                    &cache_to_df_index,
+                );
+
             Ok(LoadedSession {
                 track_bounds,
                 bg_image_bytes: None,
@@ -842,6 +874,7 @@ impl LoadedSession {
                 fg_texture: None,
                 map_origin: Some(wm0),
                 file_name,
+                repository_record: None,
                 session,
                 front_raw_pts_cache: front_raw,
                 rear_raw_pts_cache: rear_raw,
@@ -858,6 +891,7 @@ impl LoadedSession {
                 clutch_pts_cache: clutch,
                 distance_delta_pts_cache: vec![],
                 time_delta_pts_cache: vec![],
+                worksheet_channel_pts_cache,
                 gear_pts_cache: gear,
                 lap_ranges: ranges,
                 lap_markers: markers,
@@ -1055,6 +1089,7 @@ impl OpenDavApp {
 
 impl eframe::App for OpenDavApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_simgit_import();
         // --- GLOBAL DRAG & DROP SUPPORT ---
         let dropped_ibt_files: Vec<std::path::PathBuf> = ctx.input(|i| {
             i.raw
@@ -1249,56 +1284,369 @@ fn main() -> eframe::Result<()> {
 
 impl OpenDavApp {
     pub fn load_telemetry_file(&mut self, path: &std::path::Path) {
+        let simgit_project = (self.active_page == ActivePage::Graphs)
+            .then(|| {
+                self.sessions
+                    .get(self.primary_session_idx)
+                    .and_then(|session| session.repository_record.as_ref())
+                    .map(|source| source.project.clone())
+            })
+            .flatten();
+        if let Some(project) = simgit_project {
+            let previous_sidebar = self.active_sidebar_tab;
+            let result = (|| {
+                let mut repository = self
+                    .simgit_manager
+                    .repository(&project)
+                    .map_err(|error| error.to_string())?;
+                let imported = repository
+                    .import_ibt(path)
+                    .map_err(|error| error.to_string())?;
+                self.open_simgit_telemetry(&project, &imported.record.id)?;
+                self.active_sidebar_tab = previous_sidebar;
+                self.simgit_status_message = Some(match imported.status {
+                    crate::simgit::repository::ImportStatus::Imported => format!(
+                        "Imported {} into SimGit and added it to this analysis session.",
+                        imported.record.original_name
+                    ),
+                    crate::simgit::repository::ImportStatus::AlreadyPresent => format!(
+                        "Added existing repository file {} to this analysis session.",
+                        imported.record.original_name
+                    ),
+                });
+                Ok::<(), String>(())
+            })();
+            if let Err(error) = result {
+                self.simgit_status_message = Some(error.clone());
+                eprintln!("{error}");
+            }
+            return;
+        }
+        if let Err(error) = self.load_telemetry_file_with_source(path, None) {
+            eprintln!("{error}");
+        }
+    }
+
+    pub fn open_simgit_telemetry(
+        &mut self,
+        project: &str,
+        telemetry_id: &str,
+    ) -> Result<(), String> {
+        let repository = self
+            .simgit_manager
+            .repository(project)
+            .map_err(|error| error.to_string())?;
+        let original_name = repository
+            .telemetry()
+            .iter()
+            .find(|record| record.id == telemetry_id)
+            .map(|record| record.original_name.clone())
+            .ok_or_else(|| format!("Telemetry record {telemetry_id} was not found"))?;
+        let notes = repository
+            .notes_for(telemetry_id)
+            .into_iter()
+            .cloned()
+            .collect();
+        let path = repository
+            .resolve_ibt(telemetry_id)
+            .map_err(|error| error.to_string())?;
+        let source = crate::simgit::repository::RepositoryRecordRef {
+            project: project.to_owned(),
+            telemetry_id: telemetry_id.to_owned(),
+        };
+        self.load_telemetry_file_with_source(&path, Some(source.clone()))?;
+        self.simgit_notes_cache.insert(source, notes);
+        if let Some(session) = self.sessions.last_mut() {
+            session.file_name = original_name.clone();
+        }
+        self.active_file = Some(original_name);
+        self.active_page = ActivePage::Graphs;
+        self.active_sidebar_tab = Some(GraphsSidebarTab::Notes);
+        Ok(())
+    }
+
+    pub fn start_simgit_analysis(
+        &mut self,
+        project: &str,
+        telemetry_ids: &[String],
+        baseline: (&str, i32),
+        reference: (&str, i32),
+    ) -> Result<(), String> {
+        let sources: Vec<_> = telemetry_ids
+            .iter()
+            .map(
+                |telemetry_id| crate::simgit::repository::RepositoryRecordRef {
+                    project: project.to_owned(),
+                    telemetry_id: telemetry_id.clone(),
+                },
+            )
+            .collect();
+        let baseline = (
+            crate::simgit::repository::RepositoryRecordRef {
+                project: project.to_owned(),
+                telemetry_id: baseline.0.to_owned(),
+            },
+            baseline.1,
+        );
+        let reference = (
+            crate::simgit::repository::RepositoryRecordRef {
+                project: project.to_owned(),
+                telemetry_id: reference.0.to_owned(),
+            },
+            reference.1,
+        );
+        self.load_simgit_analysis_sources(sources, baseline, Some(reference), None)
+    }
+
+    pub fn open_simgit_note_context(
+        &mut self,
+        project: &str,
+        note: &crate::simgit::repository::AnalysisNote,
+    ) -> Result<(), String> {
+        let baseline = crate::simgit::repository::RepositoryRecordRef {
+            project: project.to_owned(),
+            telemetry_id: note.telemetry_id.clone(),
+        };
+        let repository = self
+            .simgit_manager
+            .repository(project)
+            .map_err(|error| error.to_string())?;
+        let resolve_reference =
+            |reference: Option<&crate::simgit::repository::ReferenceLapContext>| {
+                let Some(reference) = reference else {
+                    return Ok(None);
+                };
+                let source = reference.repository_record.clone().or_else(|| {
+                    repository
+                        .telemetry()
+                        .iter()
+                        .find(|record| record.original_name == reference.file_name)
+                        .map(|record| crate::simgit::repository::RepositoryRecordRef {
+                            project: project.to_owned(),
+                            telemetry_id: record.id.clone(),
+                        })
+                });
+                source
+                    .map(|source| Some((source, reference.lap_number)))
+                    .ok_or_else(|| {
+                        format!(
+                            "Referenced telemetry {} is not available in repository {}.",
+                            reference.file_name, project
+                        )
+                    })
+            };
+        let cyan = resolve_reference(note.context.cyan_reference.as_ref())?;
+        let secondary = resolve_reference(note.context.secondary_reference.as_ref())?;
+        let mut sources = vec![baseline.clone()];
+        for source in [cyan.as_ref(), secondary.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|(source, _)| source)
+        {
+            if !sources.contains(source) {
+                sources.push(source.clone());
+            }
+        }
+        let baseline_lap = note.context.lap_number.unwrap_or(0);
+        self.load_simgit_analysis_sources(sources, (baseline, baseline_lap), cyan, secondary)?;
+        self.cursor_x = note.context.cursor_seconds;
+        self.visible_x_range = note.context.viewport;
+        self.active_worksheet = match note.context.worksheet.as_str() {
+            "Vehicle" => WorksheetTab::Vehicle,
+            "Tyre" => WorksheetTab::Tyre,
+            "Shocks" => WorksheetTab::Shocks,
+            _ => WorksheetTab::Driver,
+        };
+        self.previous_worksheet = None;
+        self.reset_bounds_flag = false;
+        self.reset_bounds_next_frame = 0;
+        self.active_sidebar_tab = Some(GraphsSidebarTab::Notes);
+        Ok(())
+    }
+
+    fn load_simgit_analysis_sources(
+        &mut self,
+        mut sources: Vec<crate::simgit::repository::RepositoryRecordRef>,
+        baseline: (crate::simgit::repository::RepositoryRecordRef, i32),
+        cyan: Option<(crate::simgit::repository::RepositoryRecordRef, i32)>,
+        secondary: Option<(crate::simgit::repository::RepositoryRecordRef, i32)>,
+    ) -> Result<(), String> {
+        for source in [
+            Some(&baseline.0),
+            cyan.as_ref().map(|item| &item.0),
+            secondary.as_ref().map(|item| &item.0),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !sources.contains(source) {
+                sources.push(source.clone());
+            }
+        }
+        if sources.is_empty() {
+            return Err("Select at least one telemetry file for analysis.".to_owned());
+        }
+
+        let mut loaded_sessions = Vec::with_capacity(sources.len());
+        let mut note_updates = Vec::with_capacity(sources.len());
+        for source in &sources {
+            let repository = self
+                .simgit_manager
+                .repository(&source.project)
+                .map_err(|error| error.to_string())?;
+            let record = repository
+                .telemetry()
+                .iter()
+                .find(|record| record.id == source.telemetry_id)
+                .ok_or_else(|| format!("Telemetry record {} was not found", source.telemetry_id))?;
+            let path = repository
+                .resolve_ibt(&source.telemetry_id)
+                .map_err(|error| error.to_string())?;
+            let session = self.build_loaded_session(
+                &path,
+                record.original_name.clone(),
+                Some(source.clone()),
+            )?;
+            let notes = repository
+                .notes_for(&source.telemetry_id)
+                .into_iter()
+                .cloned()
+                .collect();
+            loaded_sessions.push(session);
+            note_updates.push((source.clone(), notes));
+        }
+
+        let baseline_index = sources
+            .iter()
+            .position(|source| source == &baseline.0)
+            .ok_or_else(|| "Baseline telemetry was not selected.".to_owned())?;
+        let selected_lap = valid_or_fastest_lap(&loaded_sessions[baseline_index], baseline.1)
+            .ok_or_else(|| "The baseline file has no valid laps.".to_owned())?;
+        let reference_selection = cyan.as_ref().and_then(|(source, lap)| {
+            sources
+                .iter()
+                .position(|candidate| candidate == source)
+                .and_then(|index| {
+                    valid_or_fastest_lap(&loaded_sessions[index], *lap).map(|lap| (index, lap))
+                })
+        });
+        let secondary_selection = secondary.as_ref().and_then(|(source, lap)| {
+            sources
+                .iter()
+                .position(|candidate| candidate == source)
+                .and_then(|index| {
+                    valid_or_fastest_lap(&loaded_sessions[index], *lap).map(|lap| (index, lap))
+                })
+        });
+
+        self.sessions = loaded_sessions;
+        for (source, notes) in note_updates {
+            self.simgit_notes_cache.insert(source, notes);
+        }
+        self.primary_session_idx = baseline_index;
+        self.selected_lap = Some((baseline_index, selected_lap));
+        self.ref_lap_cyan = reference_selection;
+        self.ref_lap_white = secondary_selection;
+        self.active_file = Some(self.sessions[baseline_index].file_name.clone());
+        self.session_loaded = true;
+        self.cursor_x = self.sessions[baseline_index]
+            .lap_ranges
+            .iter()
+            .find(|range| range.0 == selected_lap)
+            .map(|range| range.1);
+        self.visible_x_range = None;
+        self.update_sector_deltas();
+        self.update_lap_deltas();
+        self.reset_bounds_flag = true;
+        self.reset_bounds_next_frame = 3;
+        self.reset_track_map_bounds_flag = true;
+        self.reset_track_map_bounds_next_frame = 3;
+        self.active_page = ActivePage::Graphs;
+        self.active_sidebar_tab = Some(GraphsSidebarTab::Details);
+        Ok(())
+    }
+
+    pub fn refresh_simgit_note_cache(
+        &mut self,
+        source: &crate::simgit::repository::RepositoryRecordRef,
+    ) -> Result<(), String> {
+        let repository = self
+            .simgit_manager
+            .repository(&source.project)
+            .map_err(|error| error.to_string())?;
+        let notes = repository
+            .notes_for(&source.telemetry_id)
+            .into_iter()
+            .cloned()
+            .collect();
+        self.simgit_notes_cache.insert(source.clone(), notes);
+        Ok(())
+    }
+
+    fn load_telemetry_file_with_source(
+        &mut self,
+        path: &std::path::Path,
+        source: Option<crate::simgit::repository::RepositoryRecordRef>,
+    ) -> Result<(), String> {
         let file_name = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        self.active_file = Some(file_name.clone());
-        match crate::data::ibt_parser::parse_ibt_file(path.to_str().unwrap_or("")) {
-            Ok(parsed_session) => {
-                self.session_loaded = true;
-                crate::signals::processing::trigger_track_map_download(parsed_session.track_id);
-                
-                match crate::LoadedSession::new(
-                    file_name,
-                    parsed_session,
-                    self.settings.corner_merge_threshold,
-                    &self.settings.mapbox_api_key,
-                ) {
-                    Ok(new_session) => {
-                        self.sessions.push(new_session);
-                        let new_idx = self.sessions.len() - 1;
-                        self.primary_session_idx = new_idx;
-                        let fastest = crate::signals::processing::get_fastest_lap(
-                            &self.sessions[new_idx].session.lap_times,
-                        );
-                        self.selected_lap = if fastest > 0 {
-                            Some((new_idx, fastest))
-                        } else {
-                            None
-                        };
-                        self.cursor_x = None;
-                        self.update_sector_deltas();
+        let new_session = self.build_loaded_session(path, file_name.clone(), source)?;
+
+        self.sessions.push(new_session);
+        let new_idx = self.sessions.len() - 1;
+        self.primary_session_idx = new_idx;
+        self.active_file = Some(file_name);
+        self.session_loaded = true;
+        let fastest = crate::signals::processing::get_fastest_lap(
+            &self.sessions[new_idx].session.lap_times,
+        );
+        self.selected_lap = (fastest > 0).then_some((new_idx, fastest));
+        self.cursor_x = None;
+        self.update_sector_deltas();
         self.update_lap_deltas();
-                        self.reset_bounds_flag = true;
-                        self.reset_bounds_next_frame = 3;
-                        self.reset_track_map_bounds_flag = true;
-                        self.reset_track_map_bounds_next_frame = 3;
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to initialize session: {}", e);
-                    }
-                }
-                
-                // Automatically switch to Dashboard if loaded successfully
-                self.active_page = ActivePage::OpenDav;
-            }
-            Err(e) => {
-                eprintln!("Error parsing .ibt file: {}", e);
-            }
-        }
+        self.reset_bounds_flag = true;
+        self.reset_bounds_next_frame = 3;
+        self.reset_track_map_bounds_flag = true;
+        self.reset_track_map_bounds_next_frame = 3;
+        self.active_page = ActivePage::OpenDav;
+        Ok(())
     }
+
+    fn build_loaded_session(
+        &self,
+        path: &std::path::Path,
+        file_name: String,
+        source: Option<crate::simgit::repository::RepositoryRecordRef>,
+    ) -> Result<crate::LoadedSession, String> {
+        let parsed_session = crate::data::ibt_parser::parse_ibt_file(path)
+            .map_err(|error| format!("Error parsing {}: {error}", path.display()))?;
+        crate::signals::processing::trigger_track_map_download(parsed_session.track_id);
+        let mut session = crate::LoadedSession::new(
+            file_name.clone(),
+            parsed_session,
+            self.settings.corner_merge_threshold,
+            &self.settings.mapbox_api_key,
+        )
+        .map_err(|error| format!("Failed to initialize {file_name}: {error}"))?;
+        session.repository_record = source;
+        Ok(session)
+    }
+}
+
+fn valid_or_fastest_lap(session: &LoadedSession, requested_lap: i32) -> Option<i32> {
+    session
+        .session
+        .lap_times
+        .iter()
+        .any(|(lap, _)| *lap == requested_lap)
+        .then_some(requested_lap)
+        .or_else(|| {
+            let fastest = crate::signals::processing::get_fastest_lap(&session.session.lap_times);
+            (fastest > 0).then_some(fastest)
+        })
 }
 
 impl LoadedSession {

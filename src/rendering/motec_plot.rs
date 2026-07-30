@@ -25,6 +25,42 @@ pub struct ChartLane<'a> {
     pub traces: Vec<ChartTrace<'a>>,
 }
 
+fn display_value_and_unit(
+    selector: CacheSelector,
+    value: f64,
+    metric_unit: &'static str,
+    use_metric: bool,
+) -> (f64, &'static str) {
+    if use_metric {
+        return (value, metric_unit);
+    }
+    if selector.is_temperature() {
+        return (value * 1.8 + 32.0, " °F");
+    }
+    if selector.is_shock_deflection() {
+        return (value * 0.0393701, " in");
+    }
+    match selector {
+        CacheSelector::Speed => (value * 0.621371, " mph"),
+        CacheSelector::FrontHeight | CacheSelector::RearHeight | CacheSelector::Rake => {
+            (value * 0.0393701, " in")
+        }
+        _ => (value, metric_unit),
+    }
+}
+
+fn note_context_range(
+    context: &crate::simgit::repository::AnalysisContext,
+) -> Option<(f64, f64)> {
+    if let Some((start, end)) = context.viewport {
+        if start.is_finite() && end.is_finite() && end > start {
+            return Some((start, end));
+        }
+    }
+    let cursor = context.cursor_seconds?;
+    cursor.is_finite().then_some((cursor - 0.25, cursor + 0.25))
+}
+
 impl OpenDavApp {
     pub fn get_cache_slice(&self, selector: CacheSelector) -> &[[f64; 2]] {
         if self.sessions.is_empty() {
@@ -46,6 +82,11 @@ impl OpenDavApp {
             CacheSelector::Clutch => &loaded.clutch_pts_cache,
             CacheSelector::DistanceDelta => &loaded.distance_delta_pts_cache,
             CacheSelector::TimeDelta => &loaded.time_delta_pts_cache,
+            _ => loaded
+                .worksheet_channel_pts_cache
+                .get(&selector)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
         }
     }
 
@@ -153,6 +194,34 @@ impl OpenDavApp {
                         0.0
                     }
                 }
+                selector @ (CacheSelector::LfTempOuter
+                | CacheSelector::LfTempCenter
+                | CacheSelector::LfTempInner
+                | CacheSelector::RfTempInner
+                | CacheSelector::RfTempCenter
+                | CacheSelector::RfTempOuter
+                | CacheSelector::LrTempOuter
+                | CacheSelector::LrTempCenter
+                | CacheSelector::LrTempInner
+                | CacheSelector::RrTempInner
+                | CacheSelector::RrTempCenter
+                | CacheSelector::RrTempOuter
+                | CacheSelector::LfShockDeflection
+                | CacheSelector::RfShockDeflection
+                | CacheSelector::LrShockDeflection
+                | CacheSelector::RrShockDeflection) => selector
+                    .telemetry_source()
+                    .and_then(|(name, multiplier)| {
+                        session
+                            .dataframe
+                            .column(name)
+                            .ok()?
+                            .f64()
+                            .ok()?
+                            .get(idx)
+                            .map(|value| value * multiplier)
+                    })
+                    .unwrap_or(0.0),
             }
         } else {
             0.0
@@ -177,6 +246,13 @@ impl OpenDavApp {
             return;
         }
         let loaded = &self.sessions[self.primary_session_idx];
+        let simgit_note_zones = loaded
+            .repository_record
+            .as_ref()
+            .filter(|_| self.show_simgit_note_zones)
+            .and_then(|source| self.simgit_notes_cache.get(source))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if loaded.front_pts_cache.is_empty() {
             return;
         }
@@ -210,45 +286,33 @@ impl OpenDavApp {
         for lane_spec in &config.lanes {
             let mut traces = Vec::new();
             for trace_spec in &lane_spec.traces {
-                let mut raw_val = if has_cursor {
+                let raw_val = if has_cursor {
                     self.get_raw_value(self.primary_session_idx, trace_spec.cache, df_idx)
                 } else {
                     0.0
                 };
-                
-                let mut unit = trace_spec.unit;
-                if !self.settings.use_metric {
-                    match trace_spec.cache {
-                        CacheSelector::Speed => {
-                            raw_val *= 0.621371; // km/h to mph
-                            unit = " mph";
-                        }
-                        CacheSelector::FrontHeight
-                        | CacheSelector::RearHeight
-                        | CacheSelector::Rake => {
-                            raw_val *= 0.0393701; // mm to inches
-                            unit = " in";
-                        }
-                        _ => {}
-                    }
-                }
+                let (raw_val, unit) = display_value_and_unit(
+                    trace_spec.cache,
+                    raw_val,
+                    trace_spec.unit,
+                    self.settings.use_metric,
+                );
                 let reference_value =
                     |cache: Option<&crate::signals::comparison::ComparisonCache>| {
-                        let mut value = cache
+                        let value = cache
                             .and_then(|cache| cache.channel(trace_spec.cache))
                             .and_then(|channel| {
                                 self.cursor_x.and_then(|cx| channel.raw_value_at(cx))
                             })?;
-                                        if !self.settings.use_metric {
-                                            match trace_spec.cache {
-                                CacheSelector::Speed => value *= 0.621371,
-                                CacheSelector::FrontHeight
-                                | CacheSelector::RearHeight
-                                | CacheSelector::Rake => value *= 0.0393701,
-                                                _ => {}
-                                            }
-                                        }
-                        Some(value)
+                        Some(
+                            display_value_and_unit(
+                                trace_spec.cache,
+                                value,
+                                trace_spec.unit,
+                                self.settings.use_metric,
+                            )
+                            .0,
+                        )
                     };
                 let cyan_ref_val = reference_value(self.comparison_cyan.as_ref());
                 let secondary_ref_val = reference_value(self.comparison_secondary.as_ref());
@@ -429,6 +493,7 @@ impl OpenDavApp {
             plot_height = 300.0;
         }
 
+        let grid_opacity = self.settings.graph_grid_opacity.clamp(0.0, 1.0);
         let mut plot = Plot::new(plot_id)
             .width(plot_width)
             .height(plot_height)
@@ -437,7 +502,8 @@ impl OpenDavApp {
             .allow_drag([false, false])
             .allow_boxed_zoom(false)
             .allow_double_click_reset(false)
-            .show_grid(false)
+            .show_grid(self.settings.show_graph_grid)
+            .grid_color(theme.plot_grid.gamma_multiply(grid_opacity))
             .auto_bounds([false, false])
             .include_y(0.0)
             .include_y(100.0)
@@ -710,7 +776,31 @@ impl OpenDavApp {
                 }
             };
 
-            // C. DRAW SECTOR DELTA SHADING (if enabled)
+            // C. DRAW SIMGIT NOTE CONTEXT ZONES
+            for note in simgit_note_zones {
+                let Some((start, end)) = note_context_range(&note.context) else {
+                    continue;
+                };
+                if end < min_visible_x || start > max_visible_x {
+                    continue;
+                }
+                let color = note.color.display_color(is_dark);
+                plot_ui.polygon(
+                    Polygon::new(
+                        format!("SimGitNoteZone_{}", note.id),
+                        PlotPoints::from(vec![
+                            [start, 10.0],
+                            [end, 10.0],
+                            [end, 1000.0],
+                            [start, 1000.0],
+                        ]),
+                    )
+                    .fill_color(color.gamma_multiply(if is_dark { 0.11 } else { 0.14 }))
+                    .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.7))),
+                );
+            }
+
+            // D. DRAW SECTOR DELTA SHADING (if enabled)
             if show_chart_deltas && !sector_deltas.is_empty() {
                 if let Some((_, sel_lap_num)) = selected_lap {
                     if let Some(lap_data) = loaded
@@ -1061,5 +1151,57 @@ impl OpenDavApp {
             self.dev_metrics.points_rendered = debug_pts_rendered.get();
             self.dev_metrics.points_culled = debug_pts_culled.get();
         }
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{display_value_and_unit, note_context_range};
+    use crate::config::worksheet::CacheSelector;
+
+    #[test]
+    fn tyre_temperature_uses_selected_unit_system() {
+        let (fahrenheit, unit) =
+            display_value_and_unit(CacheSelector::LfTempCenter, 100.0, " °C", false);
+
+        assert!((fahrenheit - 212.0).abs() < 1e-9);
+        assert_eq!(unit, " °F");
+    }
+
+    #[test]
+    fn shock_deflection_uses_selected_unit_system() {
+        let (inches, unit) =
+            display_value_and_unit(CacheSelector::LfShockDeflection, 25.4, " mm", false);
+
+        assert!((inches - 1.0).abs() < 1e-5);
+        assert_eq!(unit, " in");
+    }
+
+    #[test]
+    fn note_context_zone_prefers_saved_viewport() {
+        let context = crate::simgit::repository::AnalysisContext {
+            cursor_seconds: Some(15.0),
+            viewport: Some((10.0, 20.0)),
+            lap_number: Some(2),
+            worksheet: "Driver".to_owned(),
+            cyan_reference: None,
+            secondary_reference: None,
+        };
+
+        assert_eq!(note_context_range(&context), Some((10.0, 20.0)));
+    }
+
+    #[test]
+    fn note_context_zone_falls_back_to_cursor_window() {
+        let context = crate::simgit::repository::AnalysisContext {
+            cursor_seconds: Some(15.0),
+            viewport: None,
+            lap_number: None,
+            worksheet: "Driver".to_owned(),
+            cyan_reference: None,
+            secondary_reference: None,
+        };
+
+        assert_eq!(note_context_range(&context), Some((14.75, 15.25)));
     }
 }

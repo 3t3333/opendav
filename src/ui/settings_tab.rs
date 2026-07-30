@@ -164,6 +164,61 @@ impl OpenDavApp {
                         .inner_margin(20.0)
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
+                            ui.heading(
+                                egui::RichText::new("Graph Display")
+                                    .color(theme.text_primary)
+                                    .size(21.0),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Control reference grid lines across every telemetry worksheet.",
+                                )
+                                .color(theme.text_secondary)
+                                .size(14.0),
+                            );
+                            ui.add_space(18.0);
+
+                            let visibility = ui.checkbox(
+                                &mut self.settings.show_graph_grid,
+                                egui::RichText::new("Show graph grid lines")
+                                    .color(theme.text_primary)
+                                    .size(14.0),
+                            );
+                            if visibility.changed() {
+                                self.settings.save();
+                            }
+
+                            ui.add_space(12.0);
+                            ui.add_enabled_ui(self.settings.show_graph_grid, |ui| {
+                                ui.label(
+                                    egui::RichText::new("Grid opacity")
+                                        .color(theme.text_primary)
+                                        .strong()
+                                        .size(15.0),
+                                );
+                                let opacity = ui.add(
+                                    egui::Slider::new(
+                                        &mut self.settings.graph_grid_opacity,
+                                        0.0..=1.0,
+                                    )
+                                    .show_value(true),
+                                );
+                                if opacity.changed() {
+                                    self.settings.save();
+                                }
+                            });
+                        });
+
+                    ui.add_space(16.0);
+
+                    egui::Frame::NONE
+                        .fill(theme.surface_card)
+                        .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                        .corner_radius(10.0)
+                        .inner_margin(20.0)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                                 ui.heading(
                                     egui::RichText::new("Map Integration")

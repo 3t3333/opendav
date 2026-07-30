@@ -34,6 +34,11 @@ pub struct AppTheme {
     pub brake: Color32,
     pub clutch: Color32,
     pub steering: Color32,
+    pub tyre_lf: [Color32; 3],
+    pub tyre_rf: [Color32; 3],
+    pub tyre_lr: [Color32; 3],
+    pub tyre_rr: [Color32; 3],
+    pub shock_corners: [Color32; 4],
 }
 
 impl AppTheme {
@@ -72,6 +77,32 @@ impl AppTheme {
                 brake: Color32::from_rgb(255, 105, 91),
                 clutch: Color32::from_rgb(82, 174, 235),
                 steering: Color32::from_rgb(156, 132, 255),
+                tyre_lf: [
+                    Color32::from_rgb(72, 202, 255),
+                    Color32::from_rgb(37, 133, 255),
+                    Color32::from_rgb(118, 228, 255),
+                ],
+                tyre_rf: [
+                    Color32::from_rgb(255, 184, 77),
+                    Color32::from_rgb(255, 105, 70),
+                    Color32::from_rgb(255, 220, 120),
+                ],
+                tyre_lr: [
+                    Color32::from_rgb(84, 220, 145),
+                    Color32::from_rgb(19, 150, 100),
+                    Color32::from_rgb(170, 235, 90),
+                ],
+                tyre_rr: [
+                    Color32::from_rgb(190, 130, 255),
+                    Color32::from_rgb(128, 90, 230),
+                    Color32::from_rgb(238, 140, 220),
+                ],
+                shock_corners: [
+                    Color32::from_rgb(72, 202, 255),
+                    Color32::from_rgb(255, 154, 72),
+                    Color32::from_rgb(84, 220, 145),
+                    Color32::from_rgb(190, 130, 255),
+                ],
             }
         } else {
             Self {
@@ -107,6 +138,32 @@ impl AppTheme {
                 brake: Color32::from_rgb(177, 48, 39),
                 clutch: Color32::from_rgb(23, 96, 145),
                 steering: Color32::from_rgb(79, 55, 171),
+                tyre_lf: [
+                    Color32::from_rgb(0, 103, 153),
+                    Color32::from_rgb(29, 78, 180),
+                    Color32::from_rgb(0, 130, 145),
+                ],
+                tyre_rf: [
+                    Color32::from_rgb(157, 80, 0),
+                    Color32::from_rgb(180, 48, 30),
+                    Color32::from_rgb(126, 99, 0),
+                ],
+                tyre_lr: [
+                    Color32::from_rgb(0, 110, 58),
+                    Color32::from_rgb(0, 122, 90),
+                    Color32::from_rgb(67, 105, 0),
+                ],
+                tyre_rr: [
+                    Color32::from_rgb(100, 50, 170),
+                    Color32::from_rgb(76, 58, 180),
+                    Color32::from_rgb(143, 43, 119),
+                ],
+                shock_corners: [
+                    Color32::from_rgb(0, 103, 153),
+                    Color32::from_rgb(157, 80, 0),
+                    Color32::from_rgb(0, 110, 58),
+                    Color32::from_rgb(100, 50, 170),
+                ],
             }
         }
     }
@@ -197,6 +254,16 @@ mod tests {
                 theme.clutch,
                 theme.steering,
             ] {
+                assert!(contrast(color, theme.surface_root) >= 3.0);
+            }
+            for color in theme
+                .tyre_lf
+                .into_iter()
+                .chain(theme.tyre_rf)
+                .chain(theme.tyre_lr)
+                .chain(theme.tyre_rr)
+                .chain(theme.shock_corners)
+            {
                 assert!(contrast(color, theme.surface_root) >= 3.0);
             }
         }

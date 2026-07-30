@@ -5,12 +5,12 @@ use std::fmt;
 
 use polars::prelude::Float64Chunked;
 
-use crate::config::worksheet::CacheSelector;
+use crate::config::worksheet::{worksheet_channel_group, CacheSelector};
 use crate::signals::processing::{LapData, TrackSector};
 use crate::LoadedSession;
 
 /// Plot channels backed by raw telemetry and supported by comparison caches.
-pub const COMPARISON_CHANNELS: [CacheSelector; 12] = [
+pub const COMPARISON_CHANNELS: [CacheSelector; 28] = [
     CacheSelector::Speed,
     CacheSelector::RPM,
     CacheSelector::Throttle,
@@ -23,6 +23,22 @@ pub const COMPARISON_CHANNELS: [CacheSelector; 12] = [
     CacheSelector::LongG,
     CacheSelector::Gear,
     CacheSelector::Clutch,
+    CacheSelector::LfTempOuter,
+    CacheSelector::LfTempCenter,
+    CacheSelector::LfTempInner,
+    CacheSelector::RfTempInner,
+    CacheSelector::RfTempCenter,
+    CacheSelector::RfTempOuter,
+    CacheSelector::LrTempOuter,
+    CacheSelector::LrTempCenter,
+    CacheSelector::LrTempInner,
+    CacheSelector::RrTempInner,
+    CacheSelector::RrTempCenter,
+    CacheSelector::RrTempOuter,
+    CacheSelector::LfShockDeflection,
+    CacheSelector::RfShockDeflection,
+    CacheSelector::LrShockDeflection,
+    CacheSelector::RrShockDeflection,
 ];
 
 /// Identifies one lap without borrowing its session.
@@ -376,6 +392,9 @@ fn primary_channel_scale(
     primary: &LoadedSession,
     selector: CacheSelector,
 ) -> Result<LinearPlotScale, ComparisonError> {
+    if let Some((group, plot_range)) = worksheet_channel_group(selector) {
+        return dynamic_channel_group_scale(primary, group, 0.05, plot_range.0, plot_range.1);
+    }
     let scale = match selector {
         CacheSelector::Throttle | CacheSelector::Brake | CacheSelector::Clutch => {
             linear_scale(0.0, 100.0, 28.0, 48.0)
@@ -421,6 +440,7 @@ fn primary_channel_scale(
         CacheSelector::DistanceDelta | CacheSelector::TimeDelta => {
             return Err(ComparisonError::UnsupportedChannel(selector));
         }
+        _ => return Err(ComparisonError::UnsupportedChannel(selector)),
     };
 
     Ok(scale)
@@ -439,6 +459,27 @@ fn dynamic_channel_scale(
             .cache_to_df_index
             .iter()
             .map(|index| source.value(*index)),
+    );
+    Ok(padded_scale(range, padding, plot_min, plot_max))
+}
+
+fn dynamic_channel_group_scale(
+    primary: &LoadedSession,
+    selectors: &[CacheSelector],
+    padding: f64,
+    plot_min: f64,
+    plot_max: f64,
+) -> Result<LinearPlotScale, ComparisonError> {
+    let sources: Vec<RawChannel<'_>> = selectors
+        .iter()
+        .copied()
+        .map(|selector| raw_channel(primary, selector))
+        .collect::<Result<_, _>>()?;
+    let range = finite_range(
+        primary
+            .cache_to_df_index
+            .iter()
+            .flat_map(|index| sources.iter().map(|source| source.value(*index))),
     );
     Ok(padded_scale(range, padding, plot_min, plot_max))
 }
@@ -500,6 +541,9 @@ fn raw_channel(
     loaded: &LoadedSession,
     selector: CacheSelector,
 ) -> Result<RawChannel<'_>, ComparisonError> {
+    if let Some((name, multiplier)) = selector.telemetry_source() {
+        return Ok(dataframe_channel(loaded, name, multiplier));
+    }
     let source = match selector {
         CacheSelector::Speed => dataframe_channel(loaded, "Speed", 3.6),
         CacheSelector::RPM => dataframe_channel(loaded, "RPM", 1.0),
@@ -516,6 +560,7 @@ fn raw_channel(
         CacheSelector::DistanceDelta | CacheSelector::TimeDelta => {
             return Err(ComparisonError::UnsupportedChannel(selector));
         }
+        _ => return Err(ComparisonError::UnsupportedChannel(selector)),
     };
     Ok(source)
 }
