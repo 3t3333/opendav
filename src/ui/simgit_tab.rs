@@ -651,6 +651,52 @@ impl OpenDavApp {
                         .inner_margin(14.0)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
+                                let view_tab = egui::Button::new(
+                                    egui::RichText::new(if is_active {
+                                        "Viewing note"
+                                    } else {
+                                        "View note"
+                                    })
+                                    .strong()
+                                    .small()
+                                    .color(if is_active {
+                                        theme.on_accent
+                                    } else {
+                                        theme.text_primary
+                                    }),
+                                )
+                                .fill(if is_active {
+                                    theme.accent
+                                } else {
+                                    note.color
+                                        .display_color(theme.is_dark)
+                                        .gamma_multiply(0.18)
+                                })
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    note.color.display_color(theme.is_dark),
+                                ))
+                                .corner_radius(4.0)
+                                .min_size(egui::vec2(92.0, 24.0));
+                                if ui.add(view_tab).clicked() {
+                                    open_note = Some(note.clone());
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .button(
+                                                egui::RichText::new("Delete").color(theme.danger),
+                                            )
+                                            .clicked()
+                                        {
+                                            delete_note = Some(note.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(7.0);
+                            ui.horizontal(|ui| {
                                 let (tag_rect, _) = ui.allocate_exact_size(
                                     egui::vec2(14.0, 14.0),
                                     egui::Sense::hover(),
@@ -673,19 +719,6 @@ impl OpenDavApp {
                                         .strong()
                                         .size(16.0)
                                         .color(theme.text_primary),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui
-                                            .button(
-                                                egui::RichText::new("Delete").color(theme.danger),
-                                            )
-                                            .clicked()
-                                        {
-                                            delete_note = Some(note.id.clone());
-                                        }
-                                    },
                                 );
                             });
                             ui.label(
@@ -720,9 +753,6 @@ impl OpenDavApp {
                                         .color(theme.text_tertiary),
                                     );
                                 }
-                            }
-                            if ui.button("Open context in Graphs").clicked() {
-                                open_note = Some(note.clone());
                             }
                         });
                     ui.add_space(10.0);

@@ -55,26 +55,6 @@ fn note_context_range(
     context.time_range()
 }
 
-fn update_note_hover_state(
-    hovered_note_id: Option<&str>,
-    now: f64,
-    tracked_note_id: &mut Option<String>,
-    hover_started_at: &mut Option<f64>,
-) -> bool {
-    let Some(hovered_note_id) = hovered_note_id else {
-        *tracked_note_id = None;
-        *hover_started_at = None;
-        return false;
-    };
-    if tracked_note_id.as_deref() != Some(hovered_note_id) {
-        *tracked_note_id = Some(hovered_note_id.to_owned());
-        *hover_started_at = Some(now);
-        return false;
-    }
-    let started_at = hover_started_at.get_or_insert(now);
-    now - *started_at >= 2.5
-}
-
 impl OpenDavApp {
     pub fn get_cache_slice(&self, selector: CacheSelector) -> &[[f64; 2]] {
         if self.sessions.is_empty() {
@@ -267,6 +247,10 @@ impl OpenDavApp {
             .and_then(|source| self.simgit_notes_cache.get(source))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let simgit_project = loaded
+            .repository_record
+            .as_ref()
+            .map(|source| source.project.clone());
         if loaded.front_pts_cache.is_empty() {
             return;
         }
@@ -541,10 +525,7 @@ impl OpenDavApp {
         let mut is_highlight_active = self.is_highlight_active;
         let mut highlight_start = self.highlight_start;
         let mut active_simgit_note_id = self.active_simgit_note_id.clone();
-        let mut hovered_simgit_note_id = self.hovered_simgit_note_id.clone();
-        let mut simgit_note_hover_started_at = self.simgit_note_hover_started_at;
-        let mut armed_simgit_note_id = None;
-        let frame_time = ui.ctx().input(|input| input.time);
+        let mut simgit_note_to_open = None;
         
         let selected_lap = self.selected_lap;
         let lap_ranges = &loaded.lap_ranges;
@@ -566,7 +547,6 @@ impl OpenDavApp {
 
             // --- MOTEC STYLE DOUBLE-CLICK HIGHLIGHT ZOOM STATE MACHINE ---
             if plot_ui.response().double_clicked() {
-                active_simgit_note_id = None;
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let d_click_x = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     highlight_start = Some(d_click_x);
@@ -624,7 +604,6 @@ impl OpenDavApp {
             }
 
             if plot_ui.response().dragged() {
-                active_simgit_note_id = None;
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     if is_highlight_active {
@@ -633,6 +612,7 @@ impl OpenDavApp {
                                 let zoom_min = f64::min(x_start, click_pos);
                                 let zoom_max = f64::max(x_start, click_pos);
                                 if (zoom_max - zoom_min).abs() > 0.1 {
+                                    active_simgit_note_id = None;
                                     plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
                                     cursor_x = Some(zoom_min);
                                     visible_x_range = Some((zoom_min, zoom_max));
@@ -642,6 +622,7 @@ impl OpenDavApp {
                             }
                         }
                     } else if is_dragging_ticker {
+                        active_simgit_note_id = None;
                         let pixel_delta_x = plot_ui.ctx().input(|i| i.pointer.delta().x);
                         let plot_width_pixels = plot_ui.response().rect.width();
                         let pixels_per_second = (plot_width_pixels as f64) / visible_width;
@@ -658,7 +639,6 @@ impl OpenDavApp {
             }
 
             if plot_ui.response().clicked() {
-                active_simgit_note_id = None;
                 if let Some(pointer_pos) = plot_ui.pointer_coordinate() {
                     let click_pos = pointer_pos.x.clamp(min_visible_x, max_visible_x);
                     if is_highlight_active {
@@ -667,6 +647,7 @@ impl OpenDavApp {
                                 let zoom_min = f64::min(x_start, click_pos);
                                 let zoom_max = f64::max(x_start, click_pos);
                                 if (zoom_max - zoom_min).abs() > 0.1 {
+                                    active_simgit_note_id = None;
                                     plot_ui.set_plot_bounds_x(zoom_min..=zoom_max);
                                     cursor_x = Some(zoom_min);
                                     visible_x_range = Some((zoom_min, zoom_max));
@@ -711,51 +692,6 @@ impl OpenDavApp {
                         visible_x_range = Some((new_min, mut_new_max));
                     }
                 }
-            }
-
-            let hovered_note = plot_ui
-                .pointer_coordinate()
-                .filter(|pointer| plot_ui.response().hovered() && pointer.y >= 10.0)
-                .and_then(|pointer| {
-                    simgit_note_zones.iter().find(|note| {
-                        note_context_range(&note.context)
-                            .is_some_and(|(start, end)| pointer.x >= start && pointer.x <= end)
-                    })
-                });
-            if let Some(note) = hovered_note {
-                if update_note_hover_state(
-                    Some(&note.id),
-                    frame_time,
-                    &mut hovered_simgit_note_id,
-                    &mut simgit_note_hover_started_at,
-                ) {
-                    armed_simgit_note_id = Some(note.id.clone());
-                    plot_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    if plot_ui.response().clicked() {
-                        if let Some((start, end)) = note_context_range(&note.context) {
-                            let snap_start = start.max(0.0);
-                            let snap_end = end.min(max_time);
-                            if snap_end > snap_start {
-                                plot_ui.set_plot_bounds_x(snap_start..=snap_end);
-                                visible_x_range = Some((snap_start, snap_end));
-                                cursor_x = note.context.cursor_seconds.or(Some(snap_start));
-                                active_simgit_note_id = Some(note.id.clone());
-                                is_highlight_active = false;
-                                highlight_start = None;
-                            }
-                        }
-                    }
-                }
-                plot_ui
-                    .ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(50));
-            } else {
-                update_note_hover_state(
-                    None,
-                    frame_time,
-                    &mut hovered_simgit_note_id,
-                    &mut simgit_note_hover_started_at,
-                );
             }
 
             // High-performance MinMax decimator closure (prevents aliasing/jumping spikes)
@@ -854,20 +790,14 @@ impl OpenDavApp {
                 }
                 let color = note.color.display_color(is_dark);
                 let is_active = active_simgit_note_id.as_deref() == Some(note.id.as_str());
-                let is_armed = armed_simgit_note_id.as_deref() == Some(note.id.as_str());
-                let pulse = ((frame_time * 5.0).sin() * 0.5 + 0.5) as f32;
-                let fill_strength = if is_armed {
-                    0.20 + 0.10 * pulse
-                } else if is_active {
+                let fill_strength = if is_active {
                     0.24
                 } else if is_dark {
                     0.11
                 } else {
                     0.14
                 };
-                let stroke_width = if is_armed {
-                    2.5 + 1.5 * pulse
-                } else if is_active {
+                let stroke_width = if is_active {
                     3.0
                 } else {
                     1.0
@@ -885,25 +815,50 @@ impl OpenDavApp {
                     .fill_color(color.gamma_multiply(fill_strength))
                     .stroke(egui::Stroke::new(
                         stroke_width,
-                        color.gamma_multiply(if is_active || is_armed { 1.0 } else { 0.7 }),
+                        color.gamma_multiply(if is_active { 1.0 } else { 0.7 }),
                     )),
                 );
-            }
-            if let Some(note) = armed_simgit_note_id.as_ref().and_then(|note_id| {
-                simgit_note_zones
-                    .iter()
-                    .find(|note| note.id == *note_id)
-            }) {
-                if let Some((start, end)) = note_context_range(&note.context) {
-                    plot_ui.text(Text::new(
-                        format!("SimGitNoteHint_{}", note.id),
-                        PlotPoint::new((start + end) * 0.5, 97.0),
-                        egui::RichText::new(format!("Click to view: {}", note.display_objective()))
-                            .strong()
-                            .color(theme.text_primary)
-                            .background_color(theme.surface_elevated),
-                    ));
-                }
+
+                let left = plot_ui
+                    .screen_from_plot(PlotPoint::new(start, active_bounds.max()[1]))
+                    .x;
+                let right = plot_ui
+                    .screen_from_plot(PlotPoint::new(end, active_bounds.max()[1]))
+                    .x;
+                let plot_rect = plot_ui.response().rect;
+                let tab_left = left.min(right).max(plot_rect.left());
+                let tab_right = left.max(right).min(plot_rect.right());
+                let tab_width = (tab_right - tab_left).max(1.0);
+                let tab_position = egui::pos2(tab_left, plot_rect.top() + 3.0);
+                egui::Area::new(egui::Id::new(("simgit_chart_note_tab", &note.id)))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(tab_position)
+                    .show(plot_ui.ctx(), |ui| {
+                        let tab = egui::Button::new(
+                            egui::RichText::new(if is_active { "Viewing" } else { "View note" })
+                                .strong()
+                                .small()
+                                .color(if is_active {
+                                    theme.on_accent
+                                } else {
+                                    theme.text_primary
+                                }),
+                        )
+                        .fill(if is_active {
+                            theme.accent
+                        } else {
+                            color.gamma_multiply(0.24)
+                        })
+                        .stroke(egui::Stroke::new(1.0, color))
+                        .corner_radius(4.0);
+                        if ui
+                            .add_sized([tab_width, 22.0], tab)
+                            .on_hover_text(note.display_objective())
+                            .clicked()
+                        {
+                            simgit_note_to_open = Some(note.clone());
+                        }
+                    });
             }
 
             // D. DRAW SECTOR DELTA SHADING (if enabled)
@@ -1250,8 +1205,12 @@ impl OpenDavApp {
         self.is_highlight_active = is_highlight_active;
         self.highlight_start = highlight_start;
         self.active_simgit_note_id = active_simgit_note_id;
-        self.hovered_simgit_note_id = hovered_simgit_note_id;
-        self.simgit_note_hover_started_at = simgit_note_hover_started_at;
+
+        if let (Some(project), Some(note)) = (simgit_project, simgit_note_to_open) {
+            if let Err(error) = self.open_simgit_note_context(&project, &note) {
+                self.simgit_status_message = Some(error);
+            }
+        }
 
         #[cfg(feature = "dev_tools")]
         {
@@ -1265,7 +1224,7 @@ impl OpenDavApp {
 
 #[cfg(test)]
 mod unit_tests {
-    use super::{display_value_and_unit, note_context_range, update_note_hover_state};
+    use super::{display_value_and_unit, note_context_range};
     use crate::config::worksheet::CacheSelector;
 
     #[test]
@@ -1295,6 +1254,7 @@ mod unit_tests {
             worksheet: "Driver".to_owned(),
             cyan_reference: None,
             secondary_reference: None,
+            track_map: None,
         };
 
         assert_eq!(note_context_range(&context), Some((10.0, 20.0)));
@@ -1309,48 +1269,10 @@ mod unit_tests {
             worksheet: "Driver".to_owned(),
             cyan_reference: None,
             secondary_reference: None,
+            track_map: None,
         };
 
         assert_eq!(note_context_range(&context), Some((14.75, 15.25)));
     }
 
-    #[test]
-    fn note_hover_arms_after_two_and_a_half_seconds() {
-        let mut tracked_note_id = None;
-        let mut hover_started_at = None;
-
-        assert!(!update_note_hover_state(
-            Some("note-a"),
-            10.0,
-            &mut tracked_note_id,
-            &mut hover_started_at,
-        ));
-        assert!(!update_note_hover_state(
-            Some("note-a"),
-            12.49,
-            &mut tracked_note_id,
-            &mut hover_started_at,
-        ));
-        assert!(update_note_hover_state(
-            Some("note-a"),
-            12.5,
-            &mut tracked_note_id,
-            &mut hover_started_at,
-        ));
-    }
-
-    #[test]
-    fn changing_hovered_note_restarts_the_arming_delay() {
-        let mut tracked_note_id = Some("note-a".to_owned());
-        let mut hover_started_at = Some(10.0);
-
-        assert!(!update_note_hover_state(
-            Some("note-b"),
-            13.0,
-            &mut tracked_note_id,
-            &mut hover_started_at,
-        ));
-        assert_eq!(tracked_note_id.as_deref(), Some("note-b"));
-        assert_eq!(hover_started_at, Some(13.0));
-    }
 }

@@ -168,6 +168,9 @@ pub struct OpenDavApp {
     pub track_map_rotation: f64,
     pub graphs_track_map_rotation: f64,
     pub graphs_track_map_width: f32,
+    pub graphs_track_map_bounds: Option<[[f64; 2]; 2]>,
+    pub pending_graphs_track_map_bounds: Option<[[f64; 2]; 2]>,
+    pub pending_graphs_track_map_width: Option<f32>,
     pub enable_satellite_map: bool,
     pub magnify_line_deltas: bool,
     pub magnifier_multiplier: f64,
@@ -193,8 +196,6 @@ pub struct OpenDavApp {
     pub simgit_note_color: crate::simgit::repository::NoteColor,
     pub show_simgit_note_zones: bool,
     pub active_simgit_note_id: Option<String>,
-    pub hovered_simgit_note_id: Option<String>,
-    pub simgit_note_hover_started_at: Option<f64>,
     pub simgit_notes_cache: std::collections::HashMap<
         crate::simgit::repository::RepositoryRecordRef,
         Vec<crate::simgit::repository::AnalysisNote>,
@@ -252,6 +253,9 @@ impl Default for OpenDavApp {
             track_map_rotation: 0.0,
             graphs_track_map_rotation: std::f64::consts::FRAC_PI_2,
             graphs_track_map_width: 380.0,
+            graphs_track_map_bounds: None,
+            pending_graphs_track_map_bounds: None,
+            pending_graphs_track_map_width: None,
             enable_satellite_map: false,
             magnify_line_deltas: false,
             magnifier_multiplier: 10.0,
@@ -274,8 +278,6 @@ impl Default for OpenDavApp {
             simgit_note_color: crate::simgit::repository::NoteColor::Blue,
             show_simgit_note_zones: true,
             active_simgit_note_id: None,
-            hovered_simgit_note_id: None,
-            simgit_note_hover_started_at: None,
             simgit_notes_cache: std::collections::HashMap::new(),
             simgit_status_message: None,
             simgit_import_receiver: None,
@@ -1466,11 +1468,41 @@ impl OpenDavApp {
             "Shocks" => WorksheetTab::Shocks,
             _ => WorksheetTab::Driver,
         };
+        self.restore_simgit_track_map_context(note.context.track_map.as_ref());
         self.previous_worksheet = None;
         self.reset_bounds_flag = false;
         self.reset_bounds_next_frame = 0;
         self.active_sidebar_tab = Some(GraphsSidebarTab::Notes);
         Ok(())
+    }
+
+    pub(crate) fn restore_simgit_track_map_context(
+        &mut self,
+        track_map: Option<&crate::simgit::repository::TrackMapContext>,
+    ) {
+        let Some(track_map) = track_map else {
+            return;
+        };
+        let panel_width = if track_map.panel_width.is_finite() {
+            track_map.panel_width.clamp(240.0, 820.0)
+        } else {
+            380.0
+        };
+        let bounds = track_map.valid_bounds();
+        self.show_graphs_track_map = track_map.visible;
+        self.graphs_track_map_width = panel_width;
+        self.pending_graphs_track_map_width = Some(panel_width);
+        self.graphs_track_map_rotation = if track_map.rotation.is_finite() {
+            track_map.rotation
+        } else {
+            std::f64::consts::FRAC_PI_2
+        };
+        self.graphs_track_map_bounds = bounds;
+        self.pending_graphs_track_map_bounds = bounds;
+        self.auto_follow_track_map = false;
+        self.reset_track_map_bounds_flag = bounds.is_none() && track_map.visible;
+        self.reset_track_map_bounds_next_frame =
+            if self.reset_track_map_bounds_flag { 3 } else { 0 };
     }
 
     fn load_simgit_analysis_sources(
@@ -1550,8 +1582,6 @@ impl OpenDavApp {
 
         self.sessions = loaded_sessions;
         self.active_simgit_note_id = None;
-        self.hovered_simgit_note_id = None;
-        self.simgit_note_hover_started_at = None;
         for (source, notes) in note_updates {
             self.simgit_notes_cache.insert(source, notes);
         }
@@ -1609,8 +1639,6 @@ impl OpenDavApp {
 
         self.sessions.push(new_session);
         self.active_simgit_note_id = None;
-        self.hovered_simgit_note_id = None;
-        self.simgit_note_hover_started_at = None;
         let new_idx = self.sessions.len() - 1;
         self.primary_session_idx = new_idx;
         self.active_file = Some(file_name);

@@ -66,6 +66,11 @@ impl OpenDavApp {
         }
 
         let initial_reset_bounds = self.reset_track_map_bounds_flag;
+        let restore_bounds = match placement {
+            TrackMapPlacement::Inline => None,
+            TrackMapPlacement::GraphsSidebar => self.pending_graphs_track_map_bounds.take(),
+        };
+        let mut rendered_graphs_bounds = None;
 
         if self.enable_satellite_map
             && self.sessions[self.primary_session_idx]
@@ -492,7 +497,11 @@ impl OpenDavApp {
                     .auto_bounds(egui::Vec2b::new(false, false));
 
                 let plot_resp = plot.show(ui, |plot_ui| {
-                    if initial_reset_bounds {
+                    if let Some(bounds) = restore_bounds {
+                        plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
+                            bounds[0], bounds[1],
+                        ));
+                    } else if initial_reset_bounds {
                         if min_x < max_x && min_y < max_y {
                             // Give the exact un-padded bounding box of the track trace to egui_plot.
                             // Because we use `.data_aspect(1.0)`, egui_plot will automatically 
@@ -882,6 +891,10 @@ impl OpenDavApp {
                             ));
                         }
                     }
+                    if placement == TrackMapPlacement::GraphsSidebar {
+                        let bounds = plot_ui.plot_bounds();
+                        rendered_graphs_bounds = Some([bounds.min(), bounds.max()]);
+                    }
                 });
 
                 if plot_resp.response.dragged() {
@@ -898,7 +911,12 @@ impl OpenDavApp {
 
         match placement {
             TrackMapPlacement::Inline => self.track_map_rotation = map_rotation,
-            TrackMapPlacement::GraphsSidebar => self.graphs_track_map_rotation = map_rotation,
+            TrackMapPlacement::GraphsSidebar => {
+                self.graphs_track_map_rotation = map_rotation;
+                if let Some(bounds) = rendered_graphs_bounds {
+                    self.graphs_track_map_bounds = Some(bounds);
+                }
+            }
         }
 
         if initial_reset_bounds {

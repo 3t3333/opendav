@@ -245,7 +245,9 @@ impl OpenDavApp {
 
                     if response.on_hover_text("Toggle Track Map").clicked() {
                         self.show_graphs_track_map = !self.show_graphs_track_map;
-                        if self.show_graphs_track_map {
+                        if self.show_graphs_track_map
+                            && self.pending_graphs_track_map_bounds.is_none()
+                        {
                             self.graphs_track_map_rotation = std::f64::consts::FRAC_PI_2;
                             self.reset_track_map_bounds_flag = true;
                             self.reset_track_map_bounds_next_frame = 3;
@@ -279,9 +281,22 @@ impl OpenDavApp {
             }
 
             if self.show_graphs_track_map {
-                egui::SidePanel::left("graphs_track_map_panel")
+                let panel_id = egui::Id::new("graphs_track_map_panel");
+                let requested_width = self
+                    .pending_graphs_track_map_width
+                    .take()
+                    .map(|width| width.clamp(240.0, 820.0));
+                if let Some(width) = requested_width {
+                    if let Some(mut state) =
+                        egui::containers::panel::PanelState::load(ctx, panel_id)
+                    {
+                        state.rect.max.x = state.rect.min.x + width;
+                        ctx.data_mut(|data| data.insert_persisted(panel_id, state));
+                    }
+                }
+                let panel_response = egui::SidePanel::left(panel_id)
                     .resizable(true)
-                    .default_width(380.0)
+                    .default_width(requested_width.unwrap_or(self.graphs_track_map_width))
                     .width_range(240.0..=820.0)
                     .frame(
                         egui::Frame::none()
@@ -296,6 +311,7 @@ impl OpenDavApp {
                             crate::rendering::track_map::TrackMapPlacement::GraphsSidebar,
                         );
                     });
+                self.graphs_track_map_width = panel_response.response.rect.width();
             }
             return;
         }
@@ -1318,7 +1334,7 @@ impl OpenDavApp {
         ui.add_space(10.0);
         ui.checkbox(
             &mut self.show_simgit_note_zones,
-            "Show color-coded context zones",
+            "Show note highlights on chart",
         );
         ui.add_space(8.0);
         ui.add(
@@ -1394,6 +1410,12 @@ impl OpenDavApp {
                     &self.sessions,
                     self.ref_lap_white,
                 ),
+                track_map: Some(crate::simgit::repository::TrackMapContext {
+                    visible: self.show_graphs_track_map,
+                    panel_width: self.graphs_track_map_width,
+                    rotation: self.graphs_track_map_rotation,
+                    bounds: self.graphs_track_map_bounds,
+                }),
             };
             match repository.add_note(
                 &source.telemetry_id,
@@ -1456,6 +1478,45 @@ impl OpenDavApp {
                         .inner_margin(9.0)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
+                                let view_tab = egui::Button::new(
+                                    egui::RichText::new(if is_active {
+                                        "Viewing note"
+                                    } else {
+                                        "View note"
+                                    })
+                                    .strong()
+                                    .small()
+                                    .color(if is_active {
+                                        theme.on_accent
+                                    } else {
+                                        theme.text_primary
+                                    }),
+                                )
+                                .fill(if is_active {
+                                    theme.accent
+                                } else {
+                                    note.color.display_color(is_dark).gamma_multiply(0.18)
+                                })
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    note.color.display_color(is_dark),
+                                ))
+                                .corner_radius(4.0)
+                                .min_size(egui::vec2(92.0, 24.0));
+                                if ui.add(view_tab).clicked() {
+                                    jump_to = Some(note.clone());
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button("Delete").clicked() {
+                                            delete_note = Some(note.id.clone());
+                                        }
+                                    },
+                                );
+                            });
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
                                 let (tag_rect, _) = ui.allocate_exact_size(
                                     egui::vec2(13.0, 13.0),
                                     egui::Sense::hover(),
@@ -1478,14 +1539,6 @@ impl OpenDavApp {
                                         .strong()
                                         .size(15.0)
                                         .color(theme.text_primary),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.small_button("Delete").clicked() {
-                                            delete_note = Some(note.id.clone());
-                                        }
-                                    },
                                 );
                             });
                             ui.label(
@@ -1518,9 +1571,6 @@ impl OpenDavApp {
                                         .color(theme.text_tertiary),
                                     );
                                 }
-                            }
-                            if ui.small_button("Jump to context").clicked() {
-                                jump_to = Some(note.clone());
                             }
                         });
                     ui.add_space(7.0);

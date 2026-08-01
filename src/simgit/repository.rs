@@ -103,6 +103,26 @@ pub struct ReferenceLapContext {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TrackMapContext {
+    pub visible: bool,
+    pub panel_width: f32,
+    pub rotation: f64,
+    pub bounds: Option<[[f64; 2]; 2]>,
+}
+
+impl TrackMapContext {
+    pub fn valid_bounds(&self) -> Option<[[f64; 2]; 2]> {
+        let bounds = self.bounds?;
+        bounds
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite())
+            .then_some(bounds)
+            .filter(|bounds| bounds[1][0] > bounds[0][0] && bounds[1][1] > bounds[0][1])
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AnalysisContext {
     pub cursor_seconds: Option<f64>,
     pub viewport: Option<(f64, f64)>,
@@ -112,6 +132,8 @@ pub struct AnalysisContext {
     pub cyan_reference: Option<ReferenceLapContext>,
     #[serde(default)]
     pub secondary_reference: Option<ReferenceLapContext>,
+    #[serde(default)]
+    pub track_map: Option<TrackMapContext>,
 }
 
 impl AnalysisContext {
@@ -649,7 +671,7 @@ mod tests {
     use super::{
         compress_file, decompress_file, hash_file, AnalysisContext, AnalysisNote, LapSummary,
         NoteColor, ReferenceLapContext, RepositoryError, RepositoryRecordRef, SimGitRepository,
-        TelemetryRecord,
+        TelemetryRecord, TrackMapContext,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -734,6 +756,12 @@ mod tests {
                         lap_number: 4,
                     }),
                     secondary_reference: None,
+                    track_map: Some(TrackMapContext {
+                        visible: true,
+                        panel_width: 420.0,
+                        rotation: 1.25,
+                        bounds: Some([[-30.0, -20.0], [40.0, 50.0]]),
+                    }),
                 },
             )
             .expect("note should be added");
@@ -743,6 +771,14 @@ mod tests {
         assert_eq!(reopened.notes()[0].context.cursor_seconds, Some(42.5));
         assert_eq!(reopened.notes()[0].objective, "Reduce entry rotation");
         assert_eq!(reopened.notes()[0].color, NoteColor::Orange);
+        assert_eq!(
+            reopened.notes()[0]
+                .context
+                .track_map
+                .as_ref()
+                .and_then(TrackMapContext::valid_bounds),
+            Some([[-30.0, -20.0], [40.0, 50.0]])
+        );
         assert_eq!(
             reopened.notes()[0]
                 .context
@@ -770,6 +806,7 @@ mod tests {
         assert_eq!(note.display_objective(), "Legacy");
         assert!(note.context.cyan_reference.is_none());
         assert!(note.context.secondary_reference.is_none());
+        assert!(note.context.track_map.is_none());
     }
 
     #[test]
