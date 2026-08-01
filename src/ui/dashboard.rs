@@ -1400,6 +1400,17 @@ impl OpenDavApp {
             )
             .clicked()
         {
+            let section_delta = self
+                .sessions
+                .get(self.primary_session_idx)
+                .and_then(|session| {
+                    let (start_t, end_t) = self.visible_x_range?;
+                    crate::simgit::repository::calculate_section_delta_from_cache(
+                        &session.time_delta_pts_cache,
+                        start_t,
+                        end_t,
+                    )
+                });
             let context = crate::simgit::repository::AnalysisContext {
                 cursor_seconds: self.cursor_x,
                 viewport: self.visible_x_range,
@@ -1416,6 +1427,7 @@ impl OpenDavApp {
                     rotation: self.graphs_track_map_rotation,
                     bounds: self.graphs_track_map_bounds,
                 }),
+                section_delta,
             };
             match repository.add_note(
                 &source.telemetry_id,
@@ -1540,6 +1552,16 @@ impl OpenDavApp {
                                         .size(15.0)
                                         .color(theme.text_primary),
                                 );
+                                if let Some(delta) = note.context.section_delta {
+                                    let delta_str = crate::simgit::repository::format_section_delta(delta);
+                                    let delta_clr = crate::simgit::repository::section_delta_color(delta, is_dark);
+                                    ui.label(
+                                        egui::RichText::new(delta_str)
+                                            .strong()
+                                            .size(14.0)
+                                            .color(delta_clr),
+                                    );
+                                }
                             });
                             ui.label(
                                 egui::RichText::new(format!(
@@ -1820,7 +1842,12 @@ fn format_note_context(note: &crate::simgit::repository::AnalysisNote) -> String
         .lap_number
         .map(|lap| format!("Lap {lap}"))
         .unwrap_or_else(|| "No lap".to_owned());
-    format!("{} | {lap}", note.context.worksheet)
+    if let Some(delta) = note.context.section_delta {
+        let delta_str = crate::simgit::repository::format_section_delta(delta);
+        format!("{} | {} | {}", note.context.worksheet, lap, delta_str)
+    } else {
+        format!("{} | {lap}", note.context.worksheet)
+    }
 }
 
 fn format_channel_unit_val(

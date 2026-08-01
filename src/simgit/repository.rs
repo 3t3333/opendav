@@ -134,6 +134,8 @@ pub struct AnalysisContext {
     pub secondary_reference: Option<ReferenceLapContext>,
     #[serde(default)]
     pub track_map: Option<TrackMapContext>,
+    #[serde(default)]
+    pub section_delta: Option<f64>,
 }
 
 impl AnalysisContext {
@@ -147,6 +149,68 @@ impl AnalysisContext {
         cursor
             .is_finite()
             .then_some((cursor - 0.25, cursor + 0.25))
+    }
+}
+
+pub fn calculate_section_delta_from_cache(
+    time_delta_pts: &[[f64; 2]],
+    start_t: f64,
+    end_t: f64,
+) -> Option<f64> {
+    if time_delta_pts.is_empty() || end_t <= start_t {
+        return None;
+    }
+    let start_idx = time_delta_pts
+        .binary_search_by(|p| p[0].partial_cmp(&start_t).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or_else(|idx| idx.min(time_delta_pts.len().saturating_sub(1)));
+    let end_idx = time_delta_pts
+        .binary_search_by(|p| p[0].partial_cmp(&end_t).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or_else(|idx| idx.min(time_delta_pts.len().saturating_sub(1)));
+
+    if start_idx >= time_delta_pts.len() || end_idx >= time_delta_pts.len() {
+        return None;
+    }
+
+    let delta_start = time_delta_pts[start_idx][1];
+    let delta_end = time_delta_pts[end_idx][1];
+    let section_delta = delta_end - delta_start;
+
+    if section_delta.is_finite() {
+        Some(section_delta)
+    } else {
+        None
+    }
+}
+
+pub fn format_section_delta(delta: f64) -> String {
+    if delta > 0.0 {
+        format!("+{:.3}s", delta)
+    } else {
+        format!("{:.3}s", delta)
+    }
+}
+
+pub fn section_delta_color(delta: f64, is_dark: bool) -> egui::Color32 {
+    if delta > 0.0001 {
+        // Red for time lost (+ delta)
+        if is_dark {
+            egui::Color32::from_rgb(255, 92, 92)
+        } else {
+            egui::Color32::from_rgb(210, 40, 40)
+        }
+    } else if delta < -0.0001 {
+        // Green for time gained (- delta)
+        if is_dark {
+            egui::Color32::from_rgb(70, 210, 132)
+        } else {
+            egui::Color32::from_rgb(20, 140, 60)
+        }
+    } else {
+        if is_dark {
+            egui::Color32::from_rgb(200, 200, 200)
+        } else {
+            egui::Color32::from_rgb(80, 80, 80)
+        }
     }
 }
 
@@ -177,6 +241,14 @@ impl AnalysisNote {
         } else {
             objective
         }
+    }
+
+    pub fn resolved_section_delta(&self, time_delta_pts: &[[f64; 2]]) -> Option<f64> {
+        if let Some(delta) = self.context.section_delta {
+            return Some(delta);
+        }
+        let (start_t, end_t) = self.context.time_range()?;
+        calculate_section_delta_from_cache(time_delta_pts, start_t, end_t)
     }
 }
 
@@ -762,6 +834,7 @@ mod tests {
                         rotation: 1.25,
                         bounds: Some([[-30.0, -20.0], [40.0, 50.0]]),
                     }),
+                    section_delta: None,
                 },
             )
             .expect("note should be added");
@@ -896,5 +969,24 @@ mod tests {
             payload
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn calculate_section_delta_from_cache_computes_difference() {
+        let pts = vec![
+            [10.0, 0.100],
+            [15.0, 0.250],
+            [20.0, 0.400],
+            [25.0, 0.150],
+        ];
+        // From 10.0s to 20.0s: delta goes from +0.100 to +0.400 => lost 0.300s
+        let section_delta = super::calculate_section_delta_from_cache(&pts, 10.0, 20.0);
+        assert!((section_delta.unwrap() - 0.3).abs() < 1e-5);
+        assert_eq!(super::format_section_delta(section_delta.unwrap()), "+0.300s");
+
+        // From 20.0s to 25.0s: delta goes from +0.400 to +0.150 => gained 0.250s (-0.250s)
+        let section_delta_gained = super::calculate_section_delta_from_cache(&pts, 20.0, 25.0);
+        assert!((section_delta_gained.unwrap() - (-0.25)).abs() < 1e-5);
+        assert_eq!(super::format_section_delta(section_delta_gained.unwrap()), "-0.250s");
     }
 }

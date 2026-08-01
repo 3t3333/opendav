@@ -720,6 +720,24 @@ impl OpenDavApp {
                                         .size(16.0)
                                         .color(theme.text_primary),
                                 );
+                                if let Some(delta) = note.context.section_delta {
+                                    let delta_str = crate::simgit::repository::format_section_delta(delta);
+                                    let delta_clr = crate::simgit::repository::section_delta_color(delta, theme.is_dark);
+                                    let bg_clr = delta_clr.gamma_multiply(0.18);
+                                    egui::Frame::NONE
+                                        .fill(bg_clr)
+                                        .stroke(egui::Stroke::new(1.0, delta_clr))
+                                        .corner_radius(4.0)
+                                        .inner_margin(egui::Margin::symmetric(6, 2))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!("Delta: {delta_str}"))
+                                                    .strong()
+                                                    .size(13.0)
+                                                    .color(delta_clr),
+                                            );
+                                        });
+                                }
                             });
                             ui.label(
                                 egui::RichText::new(format!(
@@ -894,7 +912,12 @@ fn format_context(note: &AnalysisNote) -> String {
         .lap_number
         .map(|lap| format!("Lap {lap}"))
         .unwrap_or_else(|| "No lap".to_owned());
-    format!("{} | {} | {}", note.context.worksheet, lap, time)
+    if let Some(delta) = note.context.section_delta {
+        let delta_str = crate::simgit::repository::format_section_delta(delta);
+        format!("{} | {} | {} | {}", note.context.worksheet, lap, time, delta_str)
+    } else {
+        format!("{} | {} | {}", note.context.worksheet, lap, time)
+    }
 }
 
 fn normalize_analysis_draft(

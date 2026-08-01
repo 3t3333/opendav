@@ -830,19 +830,39 @@ impl OpenDavApp {
                 let tab_right = left.max(right).min(plot_rect.right());
                 let tab_width = (tab_right - tab_left).max(1.0);
                 let tab_position = egui::pos2(tab_left, plot_rect.top() + 3.0);
+                let section_delta = note.resolved_section_delta(&loaded.time_delta_pts_cache);
                 egui::Area::new(egui::Id::new(("simgit_chart_note_tab", &note.id)))
                     .order(egui::Order::Foreground)
                     .fixed_pos(tab_position)
                     .show(plot_ui.ctx(), |ui| {
+                        let label_text = if let Some(delta) = section_delta {
+                            let delta_str = crate::simgit::repository::format_section_delta(delta);
+                            if is_active {
+                                format!("Viewing ({delta_str})")
+                            } else {
+                                format!("View note ({delta_str})")
+                            }
+                        } else if is_active {
+                            "Viewing".to_owned()
+                        } else {
+                            "View note".to_owned()
+                        };
+                        let text_color = if let Some(delta) = section_delta {
+                            if is_active {
+                                theme.on_accent
+                            } else {
+                                crate::simgit::repository::section_delta_color(delta, is_dark)
+                            }
+                        } else if is_active {
+                            theme.on_accent
+                        } else {
+                            theme.text_primary
+                        };
                         let tab = egui::Button::new(
-                            egui::RichText::new(if is_active { "Viewing" } else { "View note" })
+                            egui::RichText::new(label_text)
                                 .strong()
                                 .small()
-                                .color(if is_active {
-                                    theme.on_accent
-                                } else {
-                                    theme.text_primary
-                                }),
+                                .color(text_color),
                         )
                         .fill(if is_active {
                             theme.accent
@@ -1255,6 +1275,7 @@ mod unit_tests {
             cyan_reference: None,
             secondary_reference: None,
             track_map: None,
+            section_delta: None,
         };
 
         assert_eq!(note_context_range(&context), Some((10.0, 20.0)));
@@ -1270,6 +1291,7 @@ mod unit_tests {
             cyan_reference: None,
             secondary_reference: None,
             track_map: None,
+            section_delta: None,
         };
 
         assert_eq!(note_context_range(&context), Some((14.75, 15.25)));
