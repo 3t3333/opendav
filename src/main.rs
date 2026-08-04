@@ -77,8 +77,11 @@ pub struct LoadedSession {
 
     // Basic Driver Inputs Caches
     pub throttle_pts_cache: Vec<[f64; 2]>,
+    pub throttle_raw_pts_cache: Vec<[f64; 2]>,
     pub brake_pts_cache: Vec<[f64; 2]>,
+    pub brake_raw_pts_cache: Vec<[f64; 2]>,
     pub steering_pts_cache: Vec<[f64; 2]>,
+    pub steering_raw_pts_cache: Vec<[f64; 2]>,
     pub rpm_pts_cache: Vec<[f64; 2]>,
     pub gear_pts_cache: Vec<[f64; 2]>,
     pub clutch_pts_cache: Vec<[f64; 2]>,
@@ -205,9 +208,17 @@ pub struct OpenDavApp {
         Option<std::sync::mpsc::Receiver<crate::simgit::repository::ImportBatchSummary>>,
     pub show_simgit_analysis_builder: bool,
     pub simgit_analysis_draft: SimGitAnalysisDraft,
+    pub simgit_sync_role: Option<String>,
+    pub simgit_team_users: Vec<crate::simgit::data::backend::UserRoleRecord>,
+    pub simgit_auth_email: String,
+    pub simgit_auth_password: String,
+    pub simgit_access_token: Option<String>,
+    pub simgit_user_id: Option<String>,
     
-    // Application Settings
+    pub simgit_remote_projects: Option<Vec<crate::simgit::data::client::RemoteProject>>,
+    
     pub settings: crate::config::settings::AppSettings,
+    pub steering_wheel_cache: crate::simgit::ui::input_gauges::SteeringWheelSvgCache,
 
     #[cfg(feature = "dev_tools")]
     pub dev_metrics: crate::dev_tools::DebugMetrics,
@@ -283,7 +294,15 @@ impl Default for OpenDavApp {
             simgit_import_receiver: None,
             show_simgit_analysis_builder: false,
             simgit_analysis_draft: SimGitAnalysisDraft::default(),
+            simgit_sync_role: None,
+            simgit_team_users: Vec::new(),
+            simgit_auth_email: String::new(),
+            simgit_auth_password: String::new(),
+            simgit_access_token: None,
+            simgit_user_id: None,
+            simgit_remote_projects: None,
             settings: crate::config::settings::AppSettings::default(),
+            steering_wheel_cache: crate::simgit::ui::input_gauges::SteeringWheelSvgCache::default(),
             
             #[cfg(feature = "dev_tools")]
             dev_metrics: crate::dev_tools::DebugMetrics::default(),
@@ -643,6 +662,10 @@ impl LoadedSession {
                 10.0 + pct * (40.0 - 10.0)
             };
 
+            let throttle_raw = throttle.clone();
+            let brake_raw = brake.clone();
+            let steering_raw = steering.clone();
+
             // Scale and store normalized curves directly in place inside cache!
             let cached_len = front.len();
             for i in 0..cached_len {
@@ -895,8 +918,11 @@ impl LoadedSession {
                 lat_g_pts_cache: latg,
                 long_g_pts_cache: longg,
                 throttle_pts_cache: throttle,
+                throttle_raw_pts_cache: throttle_raw,
                 brake_pts_cache: brake,
+                brake_raw_pts_cache: brake_raw,
                 steering_pts_cache: steering,
+                steering_raw_pts_cache: steering_raw,
                 rpm_pts_cache: rpm,
                 clutch_pts_cache: clutch,
                 distance_delta_pts_cache: vec![],

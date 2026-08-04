@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-70 -70 140 140" width="140" height="140">
+  <!-- Outer rim -->
+  <circle cx="0" cy="0" r="60" fill="none" stroke="rgb(192,192,192)" stroke-width="8" />
+  
+  <!-- T-Spokes -->
+  <!-- Horizontal bar -->
+  <line x1="-60" y1="0" x2="60" y2="0" stroke="rgb(192,192,192)" stroke-width="8" stroke-linecap="round" />
+  <!-- Vertical drop -->
+  <line x1="0" y1="0" x2="0" y2="60" stroke="rgb(192,192,192)" stroke-width="8" stroke-linecap="round" />
+  
+  <!-- Center Marker -->
+  <!-- The marker goes from -64 to -56 on the y-axis -->
+  <line x1="0" y1="-64" x2="0" y2="-56" stroke="rgb(255, 255, 0)" stroke-width="8" stroke-linecap="square" />
+</svg>

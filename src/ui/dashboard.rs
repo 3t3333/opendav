@@ -1268,6 +1268,30 @@ impl OpenDavApp {
                 return;
             }
         };
+
+        // If a specific note is selected for viewing, draw the Dedicated Note View Sidebar Widget!
+        if let Some(note_id) = self.active_simgit_note_id.clone() {
+            if let Some(note) = repository.notes_for(&source.telemetry_id).into_iter().find(|n| n.id == note_id) {
+                let primary_session = self.sessions.get(self.primary_session_idx);
+                let cyan_comparison = self.comparison_cyan.as_ref();
+                let secondary_comparison = self.comparison_secondary.as_ref();
+                let note_ctx = crate::simgit::ui::note_view_widget::NoteViewContext {
+                    note,
+                    is_dark,
+                    cursor_x: self.cursor_x.unwrap_or(0.0),
+                    primary_session,
+                    cyan_comparison,
+                    secondary_comparison,
+                    wheel_cache: &mut self.steering_wheel_cache,
+                };
+                let back_clicked = crate::simgit::ui::note_view_widget::draw_dedicated_note_view_widget(ui, note_ctx);
+                if back_clicked {
+                    self.active_simgit_note_id = None;
+                }
+                return;
+            }
+        }
+
         let record_name = repository
             .telemetry()
             .iter()

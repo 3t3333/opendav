@@ -1,4 +1,4 @@
 pub mod dashboard;
 pub mod tabs;
-pub mod simgit_tab;
+pub use crate::simgit::ui::simgit_tab;
 pub mod settings_tab;

@@ -13,6 +13,10 @@ pub struct AppSettings {
     pub mapbox_api_key: String,
     #[serde(default)]
     pub recent_files: Vec<String>,
+    #[serde(default)]
+    pub supabase_url: String,
+    #[serde(default)]
+    pub supabase_anon_key: String,
 }
 
 impl Default for AppSettings {
@@ -25,6 +29,8 @@ impl Default for AppSettings {
             graph_grid_opacity: default_graph_grid_opacity(),
             mapbox_api_key: String::new(),
             recent_files: Vec::new(),
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
         }
     }
 }

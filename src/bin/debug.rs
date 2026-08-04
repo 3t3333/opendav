@@ -1,4 +1,4 @@
-#[path = "../simgit/setup_parser.rs"]
+#[path = "../simgit/data/setup_parser.rs"]
 pub mod setup_parser;
 
 use std::path::Path;
