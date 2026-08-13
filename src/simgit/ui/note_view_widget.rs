@@ -1,5 +1,7 @@
 use crate::config::theme::AppTheme;
-use crate::simgit::data::note_math::{sample_channel_at_distance, sample_channel_at_time, LiveInputSample};
+use crate::simgit::data::note_math::{
+    sample_channel_at_distance, sample_channel_at_time, LiveInputSample,
+};
 use crate::simgit::data::repository::AnalysisNote;
 use crate::simgit::ui::input_gauges::{draw_input_gauge_card, SteeringWheelSvgCache};
 use egui::Ui;
@@ -107,16 +109,20 @@ pub fn draw_dedicated_note_view_widget(ui: &mut Ui, ctx: NoteViewContext<'_>) ->
             ui.add_space(14.0);
 
             // 4. Section Input Gauges Header
-            ui.heading(
-                egui::RichText::new("Section Driver Input Gauges")
-                    .strong()
-                    .size(16.0)
-                    .color(theme.text_primary),
-            );
+            ui.horizontal(|ui| {
+                ui.heading(
+                    egui::RichText::new("Section Driver Input Gauges")
+                        .strong()
+                        .size(16.0)
+                        .color(theme.text_primary),
+                );
+            });
             ui.label(
-                egui::RichText::new("Scrub or playback telemetry to view real-time pedal and steering inputs.")
-                    .small()
-                    .color(theme.text_secondary),
+                egui::RichText::new(
+                    "Scrub or playback telemetry to view real-time pedal and steering inputs.",
+                )
+                .small()
+                .color(theme.text_secondary),
             );
             ui.add_space(8.0);
 
@@ -125,7 +131,8 @@ pub fn draw_dedicated_note_view_widget(ui: &mut Ui, ctx: NoteViewContext<'_>) ->
 
             // Determine reference session if available
             let ref_comparison = ctx.cyan_comparison.or(ctx.secondary_comparison);
-            let ref_sample = ref_comparison.map(|comp| extract_comparison_live_sample(Some(comp), ctx.cursor_x));
+            let ref_sample =
+                ref_comparison.map(|comp| extract_comparison_live_sample(Some(comp), ctx.cursor_x));
 
             // Section time delta value to show above the baseline input overlay
             let section_delta = ctx.note.context.section_delta.or_else(|| {
@@ -139,7 +146,7 @@ pub fn draw_dedicated_note_view_widget(ui: &mut Ui, ctx: NoteViewContext<'_>) ->
                 })
             });
 
-            // 5. Baseline Input Gauge Card
+            // Combined Input Gauge Card
             let baseline_lap_text = ctx
                 .note
                 .context
@@ -149,31 +156,13 @@ pub fn draw_dedicated_note_view_widget(ui: &mut Ui, ctx: NoteViewContext<'_>) ->
             draw_input_gauge_card(
                 ui,
                 &theme,
-                "BASELINE TELEMETRY",
+                "COMBINED TELEMETRY",
                 Some(&baseline_lap_text),
                 &primary_sample,
+                ref_sample.as_ref(),
                 ctx.wheel_cache,
                 section_delta.map(|d| (d, ctx.is_dark)),
             );
-
-            // 6. Reference Input Gauge Card (if reference lap is loaded)
-            if let Some(ref_sample) = ref_sample {
-                ui.add_space(10.0);
-                let ref_label = if ctx.cyan_comparison.is_some() {
-                    "CYAN REFERENCE"
-                } else {
-                    "SECONDARY REFERENCE"
-                };
-                draw_input_gauge_card(
-                    ui,
-                    &theme,
-                    ref_label,
-                    Some("Reference Lap"),
-                    &ref_sample,
-                    ctx.wheel_cache,
-                    None,
-                );
-            }
         });
 
     back_clicked
@@ -181,7 +170,10 @@ pub fn draw_dedicated_note_view_widget(ui: &mut Ui, ctx: NoteViewContext<'_>) ->
 
 /// Helper function to extract live driver input sample (Throttle, Brake, Steering Angle)
 /// from a LoadedSession at `cursor_time`.
-fn extract_live_sample(session: Option<&crate::LoadedSession>, cursor_time: f64) -> LiveInputSample {
+fn extract_live_sample(
+    session: Option<&crate::LoadedSession>,
+    cursor_time: f64,
+) -> LiveInputSample {
     let Some(sess) = session else {
         return LiveInputSample::default();
     };
@@ -190,7 +182,10 @@ fn extract_live_sample(session: Option<&crate::LoadedSession>, cursor_time: f64)
     let brake = sample_channel_at_time(&sess.brake_raw_pts_cache, cursor_time);
     let steering_deg = -sample_channel_at_time(&sess.steering_raw_pts_cache, cursor_time);
     let time_delta = if !sess.time_delta_pts_cache.is_empty() {
-        Some(sample_channel_at_time(&sess.time_delta_pts_cache, cursor_time))
+        Some(sample_channel_at_time(
+            &sess.time_delta_pts_cache,
+            cursor_time,
+        ))
     } else {
         None
     };
@@ -211,12 +206,12 @@ fn extract_comparison_live_sample(
         .channel(crate::config::worksheet::CacheSelector::Throttle)
         .and_then(|c| c.raw_value_at(cursor_time))
         .unwrap_or(0.0);
-        
+
     let brake = comp
         .channel(crate::config::worksheet::CacheSelector::Brake)
         .and_then(|c| c.raw_value_at(cursor_time))
         .unwrap_or(0.0);
-        
+
     let steering_deg = -comp
         .channel(crate::config::worksheet::CacheSelector::Steering)
         .and_then(|c| c.raw_value_at(cursor_time))

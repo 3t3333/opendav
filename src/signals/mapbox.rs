@@ -1,6 +1,6 @@
 use std::fs;
-use std::path::Path;
 use std::io::Read;
+use std::path::Path;
 
 fn fetch_layer(
     api_key: &str,
@@ -28,7 +28,7 @@ fn fetch_layer(
     let height = wm_max_y - wm_min_y;
     let mut size = f64::max(width, height);
     size *= padding;
-    
+
     let pad_min_lon = web_mercator_to_wgs84(cx - size / 2.0, cy - size / 2.0).0;
     let pad_min_lat = web_mercator_to_wgs84(cx - size / 2.0, cy - size / 2.0).1;
     let pad_max_lon = web_mercator_to_wgs84(cx + size / 2.0, cy + size / 2.0).0;
@@ -51,7 +51,10 @@ fn fetch_layer(
 
     let grid_size = std::cmp::max(1, max_grid_size / 4);
     let tile_res = 1280;
-    println!("Fetching Mapbox {} map ({}x{} grid)...", suffix, grid_size, grid_size);
+    println!(
+        "Fetching Mapbox {} map ({}x{} grid)...",
+        suffix, grid_size, grid_size
+    );
 
     let mut stitched_img = RgbaImage::new(grid_size * tile_res, grid_size * tile_res);
 
@@ -92,14 +95,16 @@ fn fetch_layer(
     for res in fetched_tiles {
         if let Ok(((c, r), bytes)) = res {
             if let Ok(img) = image::load_from_memory(&bytes) {
-                stitched_img.copy_from(&img.to_rgba8(), c * tile_res, r * tile_res).ok();
+                stitched_img
+                    .copy_from(&img.to_rgba8(), c * tile_res, r * tile_res)
+                    .ok();
             }
         }
     }
 
     let mut final_bytes = Vec::new();
     stitched_img.write_to(&mut Cursor::new(&mut final_bytes), image::ImageFormat::Png)?;
-    
+
     fs::write(&cache_path, &final_bytes)?;
     if let Ok(bounds_json) = serde_json::to_string(&final_bounds) {
         let _ = fs::write(&bounds_path, bounds_json);
@@ -122,7 +127,9 @@ pub fn fetch_mapbox_image(
         fs::create_dir_all(maps_dir)?;
     }
 
-    let (bg_bytes, bg_bounds) = match fetch_layer(api_key, track_id, min_lon, min_lat, max_lon, max_lat, 10.0, 4, "dark_bg", maps_dir) {
+    let (bg_bytes, bg_bounds) = match fetch_layer(
+        api_key, track_id, min_lon, min_lat, max_lon, max_lat, 10.0, 4, "dark_bg", maps_dir,
+    ) {
         Ok((b, bounds)) => (Some(b), Some(bounds)),
         Err(e) => {
             eprintln!("Failed to fetch BG layer: {}", e);
@@ -130,7 +137,18 @@ pub fn fetch_mapbox_image(
         }
     };
 
-    let (fg_bytes, fg_bounds) = fetch_layer(api_key, track_id, min_lon, min_lat, max_lon, max_lat, 1.4, max_grid_size, "dark", maps_dir)?;
+    let (fg_bytes, fg_bounds) = fetch_layer(
+        api_key,
+        track_id,
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+        1.4,
+        max_grid_size,
+        "dark",
+        maps_dir,
+    )?;
 
     Ok((fg_bytes, fg_bounds, bg_bytes, bg_bounds))
 }

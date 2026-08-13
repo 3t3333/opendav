@@ -80,7 +80,7 @@ impl OpenDavApp {
             let api_key = self.settings.mapbox_api_key.clone();
             self.sessions[self.primary_session_idx].fetch_satellite_maps(&api_key);
         }
-        
+
         if self.sessions[self.primary_session_idx].bg_texture.is_none() {
             if let Some(bytes) = &self.sessions[self.primary_session_idx].bg_image_bytes {
                 if let Ok(mut image) = image::load_from_memory(bytes) {
@@ -103,7 +103,7 @@ impl OpenDavApp {
                 }
             }
         }
-        
+
         if self.sessions[self.primary_session_idx].fg_texture.is_none() {
             if let Some(bytes) = &self.sessions[self.primary_session_idx].fg_image_bytes {
                 if let Ok(mut image) = image::load_from_memory(bytes) {
@@ -126,19 +126,23 @@ impl OpenDavApp {
                 }
             }
         }
-        
+
         if placement == TrackMapPlacement::Inline {
             ui.horizontal_wrapped(|ui| {
                 let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
                 if ref_active {
                     ui.checkbox(
                         &mut self.show_sector_deltas,
-                        egui::RichText::new("Sector Delta Overlays").strong().color(theme.text_primary),
+                        egui::RichText::new("Sector Delta Overlays")
+                            .strong()
+                            .color(theme.text_primary),
                     );
                     ui.add_space(15.0);
                     ui.checkbox(
                         &mut self.show_chart_deltas,
-                        egui::RichText::new("Time Series Charts Deltas").strong().color(theme.text_primary),
+                        egui::RichText::new("Time Series Charts Deltas")
+                            .strong()
+                            .color(theme.text_primary),
                     );
                 } else {
                     ui.add_enabled_ui(false, |ui| {
@@ -154,7 +158,9 @@ impl OpenDavApp {
                         ui.add_space(15.0);
                         ui.checkbox(
                             &mut dummy,
-                            egui::RichText::new("Time Series Charts Deltas").small().color(theme.text_primary),
+                            egui::RichText::new("Time Series Charts Deltas")
+                                .small()
+                                .color(theme.text_primary),
                         );
                     });
                 }
@@ -180,7 +186,7 @@ impl OpenDavApp {
                 }
             });
         }
-        
+
         let loaded = &self.sessions[self.primary_session_idx];
         let satellite_casing = egui::Color32::from_black_alpha(160);
         let active_lap_num = self
@@ -223,7 +229,7 @@ impl OpenDavApp {
                 None
             }
         });
-        
+
         let primary_origin = loaded.map_origin.unwrap_or([0.0, 0.0]);
         let cyan_offset = self
             .ref_lap_cyan
@@ -247,7 +253,7 @@ impl OpenDavApp {
                 }
             })
             .unwrap_or([0.0, 0.0]);
-        
+
         let ref_active = self.ref_lap_cyan.or(self.ref_lap_white).is_some();
         let show_deltas = self.show_sector_deltas && ref_active;
         let mut map_rotation = match placement {
@@ -266,138 +272,138 @@ impl OpenDavApp {
                 ui.set_max_width(control_rail_width);
                 ui.style_mut().spacing.slider_width = (control_rail_width - 55.0).clamp(30.0, 80.0);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.vertical(|ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        if placement == TrackMapPlacement::GraphsSidebar {
-                            ui.heading("Track Map");
-                            ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            if placement == TrackMapPlacement::GraphsSidebar {
+                                ui.heading("Track Map");
+                                ui.add_space(8.0);
 
-                            ui.checkbox(&mut self.enable_satellite_map, "Satellite Map");
-                            ui.checkbox(&mut self.auto_follow_track_map, "Auto-Follow Car");
-                            ui.checkbox(&mut self.auto_rotate_track_map, "Auto-Rotate");
-                            ui.checkbox(&mut self.show_all_splits, "Show Track Splits");
+                                ui.checkbox(&mut self.enable_satellite_map, "Satellite Map");
+                                ui.checkbox(&mut self.auto_follow_track_map, "Auto-Follow Car");
+                                ui.checkbox(&mut self.auto_rotate_track_map, "Auto-Rotate");
+                                ui.checkbox(&mut self.show_all_splits, "Show Track Splits");
 
-                            if ref_active {
-                                ui.checkbox(&mut self.show_sector_deltas, "Sector Deltas");
-                                ui.checkbox(&mut self.show_chart_deltas, "Chart Deltas");
-                                ui.checkbox(&mut self.magnify_line_deltas, "Line Magnifier");
-                                if self.magnify_line_deltas {
-                                    ui.add(
+                                if ref_active {
+                                    ui.checkbox(&mut self.show_sector_deltas, "Sector Deltas");
+                                    ui.checkbox(&mut self.show_chart_deltas, "Chart Deltas");
+                                    ui.checkbox(&mut self.magnify_line_deltas, "Line Magnifier");
+                                    if self.magnify_line_deltas {
+                                        ui.add(
                                             egui::Slider::new(
                                                 &mut self.magnifier_multiplier,
                                                 1.0..=20.0,
                                             )
                                             .text("Scale")
                                             .show_value(true),
-                                    );
-                                }
-                            } else {
-                                ui.add_enabled_ui(false, |ui| {
-                                    let mut disabled = false;
-                                    ui.checkbox(&mut disabled, "Sector Deltas");
-                                    ui.checkbox(&mut disabled, "Chart Deltas");
-                                });
-                                ui.label(
+                                        );
+                                    }
+                                } else {
+                                    ui.add_enabled_ui(false, |ui| {
+                                        let mut disabled = false;
+                                        ui.checkbox(&mut disabled, "Sector Deltas");
+                                        ui.checkbox(&mut disabled, "Chart Deltas");
+                                    });
+                                    ui.label(
                                         egui::RichText::new(
                                             "Select a reference lap to enable delta overlays.",
                                         )
                                         .small()
                                         .color(theme.text_disabled),
+                                    );
+                                }
+
+                                ui.add_space(10.0);
+                                ui.separator();
+                                ui.add_space(10.0);
+                            }
+
+                            ui.heading("Legend");
+                            ui.add_space(8.0);
+
+                            if let Some(lap) = ref_cyan_lap {
+                                draw_reference_legend_row(
+                                    ui,
+                                    theme.reference_primary,
+                                    format!("Cyan Reference - Lap {}", lap.lap_num),
+                                );
+                            }
+                            if let Some(lap) = ref_white_lap {
+                                draw_reference_legend_row(
+                                    ui,
+                                    theme.reference_secondary,
+                                    format!("Secondary Reference - Lap {}", lap.lap_num),
                                 );
                             }
 
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.add_space(10.0);
-                        }
-
-                        ui.heading("Legend");
-                        ui.add_space(8.0);
-                        
-                        if let Some(lap) = ref_cyan_lap {
-                            draw_reference_legend_row(
-                                ui,
-                                theme.reference_primary,
-                                format!("Cyan Reference - Lap {}", lap.lap_num),
-                            );
-                        }
-                        if let Some(lap) = ref_white_lap {
-                            draw_reference_legend_row(
-                                ui,
-                                theme.reference_secondary,
-                                format!("Secondary Reference - Lap {}", lap.lap_num),
-                            );
-                        }
-                        
-                        ui.horizontal(|ui| {
+                            ui.horizontal(|ui| {
                                 let (rect, _response) = ui.allocate_exact_size(
                                     egui::vec2(12.0, 12.0),
                                     egui::Sense::hover(),
                                 );
                                 ui.painter().rect_filled(rect, 2.0, theme.danger);
-                            ui.label("Start/Finish Line");
-                        });
-                        
-                        ui.horizontal(|ui| {
+                                ui.label("Start/Finish Line");
+                            });
+
+                            ui.horizontal(|ui| {
                                 let (rect, _response) = ui.allocate_exact_size(
                                     egui::vec2(12.0, 12.0),
                                     egui::Sense::hover(),
                                 );
                                 ui.painter().circle_filled(rect.center(), 5.0, theme.accent);
-                            ui.label("Current Position");
-                        });
+                                ui.label("Current Position");
+                            });
 
-                        ui.add_space(10.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-                        
-                        ui.label(egui::RichText::new("Track Splits").strong());
-                        ui.add_space(4.0);
-                        
-                        for (s_idx, sector) in loaded.sectors.iter().enumerate() {
-                            let mut is_visible = !self.hidden_splits.contains(&sector.name);
-                            ui.horizontal(|ui| {
-                                // Draw color swatch
-                                let swatch_color = if show_deltas {
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.add_space(10.0);
+
+                            ui.label(egui::RichText::new("Track Splits").strong());
+                            ui.add_space(4.0);
+
+                            for (s_idx, sector) in loaded.sectors.iter().enumerate() {
+                                let mut is_visible = !self.hidden_splits.contains(&sector.name);
+                                ui.horizontal(|ui| {
+                                    // Draw color swatch
+                                    let swatch_color = if show_deltas {
                                         let delta =
                                             self.sector_deltas.get(s_idx).copied().flatten();
-                                    if let Some(d) = delta {
-                                        if d <= 0.0 {
+                                        if let Some(d) = delta {
+                                            if d <= 0.0 {
                                                 theme.success
-                                        } else {
+                                            } else {
                                                 theme.danger
+                                            }
+                                        } else {
+                                            theme.text_disabled
                                         }
                                     } else {
-                                            theme.text_disabled
-                                    }
-                                } else {
                                         theme.accent
-                                };
-                                
+                                    };
+
                                     let (rect, _response) = ui.allocate_exact_size(
                                         egui::vec2(12.0, 12.0),
                                         egui::Sense::hover(),
                                     );
-                                ui.painter().rect_filled(rect, 2.0, swatch_color);
-                                
-                                if ui.checkbox(&mut is_visible, &sector.name).changed() {
-                                    if is_visible {
-                                        self.hidden_splits.remove(&sector.name);
-                                    } else {
-                                        self.hidden_splits.insert(sector.name.clone());
+                                    ui.painter().rect_filled(rect, 2.0, swatch_color);
+
+                                    if ui.checkbox(&mut is_visible, &sector.name).changed() {
+                                        if is_visible {
+                                            self.hidden_splits.remove(&sector.name);
+                                        } else {
+                                            self.hidden_splits.insert(sector.name.clone());
+                                        }
                                     }
-                                }
-                            });
-                        }
+                                });
+                            }
+                        });
                     });
                 });
             });
-                });
 
             // Plot taking the remaining space on the left
             ui.allocate_ui(egui::vec2(plot_width.max(100.0), height), |ui| {
                 let reset_bounds_flag = initial_reset_bounds;
-                
+
                 if reset_bounds_flag {
                     // Compute raw unrotated bounds to find aspect ratio of track
                     let mut raw_min_x = f64::MAX;
@@ -417,13 +423,13 @@ impl OpenDavApp {
                     }
                     let data_w = raw_max_x - raw_min_x;
                     let data_h = raw_max_y - raw_min_y;
-                    
+
                     let phys_w = plot_width.max(100.0) as f64;
                     let phys_h = height as f64;
-                    
+
                     let data_aspect = data_w / data_h.max(0.0001);
                     let phys_aspect = phys_w / phys_h.max(0.0001);
-                    
+
                     map_rotation = placement.reset_rotation(data_aspect, phys_aspect);
                     self.auto_rotate_track_map = false;
                 }
@@ -439,7 +445,7 @@ impl OpenDavApp {
                             lap_rel_time = end_t - start_t;
                         }
                     }
-                    
+
                     if self.auto_rotate_track_map {
                         let (cx_x1, cx_y1) = get_lap_coord_at_time(active_lap, lap_rel_time);
                         let (cx_x2, cx_y2) = get_lap_coord_at_time(active_lap, lap_rel_time + 0.1);
@@ -466,7 +472,7 @@ impl OpenDavApp {
                                     .collect()
                             })
                             .collect()
-                };
+                    };
 
                 let mut min_x = f64::MAX;
                 let mut max_x = f64::MIN;
@@ -484,7 +490,7 @@ impl OpenDavApp {
                     min_y = min_y.min(p[1]);
                     max_y = max_y.max(p[1]);
                 }
-                
+
                 // Initialize the egui_plot
                 let plot = Plot::new(placement.plot_id())
                     .height(height)
@@ -504,31 +510,31 @@ impl OpenDavApp {
                     } else if initial_reset_bounds {
                         if min_x < max_x && min_y < max_y {
                             // Give the exact un-padded bounding box of the track trace to egui_plot.
-                            // Because we use `.data_aspect(1.0)`, egui_plot will automatically 
+                            // Because we use `.data_aspect(1.0)`, egui_plot will automatically
                             // expand the bounds to seamlessly fit the physical aspect ratio of the window,
                             // without clipping any of the track.
-                            
+
                             let center_x = (min_x + max_x) / 2.0;
                             let center_y = (min_y + max_y) / 2.0;
-                            
+
                             let data_w = max_x - min_x;
                             let data_h = max_y - min_y;
-                            
+
                             let phys_w = plot_width.max(100.0) as f64;
                             let phys_h = height as f64;
-                            
+
                             let mut target_w = data_w;
                             let mut target_h = data_h;
-                            
+
                             if data_w * phys_h > data_h * phys_w {
                                 target_h = data_w * phys_h / phys_w;
                             } else {
                                 target_w = data_h * phys_w / phys_h;
                             }
-                            
+
                             target_w *= 1.05;
                             target_h *= 1.05;
-                            
+
                             plot_ui.set_plot_bounds(egui_plot::PlotBounds::from_min_max(
                                 [center_x - target_w / 2.0, center_y - target_h / 2.0],
                                 [center_x + target_w / 2.0, center_y + target_h / 2.0],
@@ -544,18 +550,18 @@ impl OpenDavApp {
                                 crate::signals::mapbox::wgs84_to_web_mercator(bounds[0], bounds[1]);
                             let (max_x, max_y) =
                                 crate::signals::mapbox::wgs84_to_web_mercator(bounds[2], bounds[3]);
-                            
+
                             let mut center_x = (min_x + max_x) / 2.0;
                             let mut center_y = (min_y + max_y) / 2.0;
                             if let Some(origin) = loaded.map_origin {
                                 center_x -= origin[0];
                                 center_y -= origin[1];
                             }
-                            
+
                             let size_x = max_x - min_x;
                             let size_y = max_y - min_y;
                             let rot_center = rotate_point(center_x, center_y);
-                            
+
                             plot_ui.image(
                                 egui_plot::PlotImage::new(
                                     "mapbox_bg_layer",
@@ -566,7 +572,7 @@ impl OpenDavApp {
                                 .rotate(map_rotation),
                             );
                         }
-                        
+
                         // 0.5. Draw Mapbox Track Map (FG Layer)
                         if let (Some(texture), Some(bounds)) =
                             (&loaded.fg_texture, &loaded.fg_bounds)
@@ -575,20 +581,20 @@ impl OpenDavApp {
                                 crate::signals::mapbox::wgs84_to_web_mercator(bounds[0], bounds[1]);
                             let (max_x, max_y) =
                                 crate::signals::mapbox::wgs84_to_web_mercator(bounds[2], bounds[3]);
-                            
+
                             let mut center_x = (min_x + max_x) / 2.0;
                             let mut center_y = (min_y + max_y) / 2.0;
-                            
+
                             if let Some(origin) = loaded.map_origin {
                                 center_x -= origin[0];
                                 center_y -= origin[1];
                             }
-                            
+
                             let size_x = max_x - min_x;
                             let size_y = max_y - min_y;
-                            
+
                             let rot_center = rotate_point(center_x, center_y);
-                            
+
                             plot_ui.image(
                                 egui_plot::PlotImage::new(
                                     "mapbox_fg_layer",
@@ -602,39 +608,53 @@ impl OpenDavApp {
                     }
 
                     // 1. Draw Reference Laps (underneath - using unified helper closure)
-                    let render_ref_lap_trace = |plot_ui: &mut egui_plot::PlotUi, ref_lap: Option<&LapData>, offset: [f64; 2], color: egui::Color32| {
-                        if let Some(lap) = ref_lap {
-                            let segments = if self.magnify_line_deltas {
-                                rotate_segments(
-                                    get_magnified_lap_segments(
-                                        lap,
-                                        active_lap,
-                                        self.magnifier_multiplier,
-                                    ),
-                                    offset,
-                                )
-                            } else {
-                                rotate_segments(get_lap_segments(lap), offset)
-                            };
-                            for (_seg_idx, seg_pts) in segments.into_iter().enumerate() {
-                                if self.enable_satellite_map {
+                    let render_ref_lap_trace =
+                        |plot_ui: &mut egui_plot::PlotUi,
+                         ref_lap: Option<&LapData>,
+                         offset: [f64; 2],
+                         color: egui::Color32| {
+                            if let Some(lap) = ref_lap {
+                                let segments = if self.magnify_line_deltas {
+                                    rotate_segments(
+                                        get_magnified_lap_segments(
+                                            lap,
+                                            active_lap,
+                                            self.magnifier_multiplier,
+                                        ),
+                                        offset,
+                                    )
+                                } else {
+                                    rotate_segments(get_lap_segments(lap), offset)
+                                };
+                                for (_seg_idx, seg_pts) in segments.into_iter().enumerate() {
+                                    if self.enable_satellite_map {
+                                        plot_ui.line(
+                                            Line::new("", PlotPoints::from(seg_pts.clone()))
+                                                .color(satellite_casing)
+                                                .width(3.825),
+                                        );
+                                    }
                                     plot_ui.line(
-                                        Line::new("", PlotPoints::from(seg_pts.clone()))
-                                            .color(satellite_casing)
-                                            .width(3.825),
+                                        Line::new("", PlotPoints::from(seg_pts))
+                                            .color(color)
+                                            .width(1.7),
                                     );
                                 }
-                                plot_ui.line(
-                                    Line::new("", PlotPoints::from(seg_pts))
-                                        .color(color)
-                                        .width(1.7),
-                                );
                             }
-                        }
-                    };
+                        };
 
-                    render_ref_lap_trace(plot_ui, ref_cyan_lap, cyan_offset, theme.reference_primary);
-                    render_ref_lap_trace(plot_ui, ref_white_lap, white_offset, theme.reference_secondary);
+                    render_ref_lap_trace(
+                        plot_ui,
+                        ref_cyan_lap,
+                        cyan_offset,
+                        theme.reference_primary,
+                    );
+                    render_ref_lap_trace(
+                        plot_ui,
+                        ref_white_lap,
+                        white_offset,
+                        theme.reference_secondary,
+                    );
 
                     // 2. Draw Active Lap (color-coded by sector if show_deltas is true)
                     if show_deltas {
@@ -665,7 +685,7 @@ impl OpenDavApp {
                                 // Empty name because we render the labels manually below, AND we have the side panel legend!
                                 plot_ui.line(
                                     Line::new("", PlotPoints::from(seg_pts))
-                                    .color(seg_color)
+                                        .color(seg_color)
                                         .width(1.7),
                                 );
                             }
@@ -695,16 +715,16 @@ impl OpenDavApp {
                         let y0 = active_lap.y[0];
                         let x1 = active_lap.x[1];
                         let y1 = active_lap.y[1];
-                        
+
                         // Direction vector of the track at start/finish
                         let dx = x1 - x0;
                         let dy = y1 - y0;
-                        let len = (dx*dx + dy*dy).sqrt();
+                        let len = (dx * dx + dy * dy).sqrt();
                         if len > 0.0 {
                             // Normal vector (perpendicular to direction)
                             let nx = -dy / len;
                             let ny = dx / len;
-                            
+
                             // Draw a line segment of length 16 meters centered on the S/F point
                             let sf_width = 8.0;
                             let p0 = rotate_point(x0 - nx * sf_width, y0 - ny * sf_width);
@@ -715,8 +735,8 @@ impl OpenDavApp {
                                     Line::new("Start/Finish Casing", sf_pts.clone())
                                         .color(satellite_casing)
                                         .width(6.0),
-                            );
-                        }
+                                );
+                            }
                             plot_ui.line(Line::new("", sf_pts).color(theme.danger).width(3.5));
                         }
                     }
@@ -729,7 +749,7 @@ impl OpenDavApp {
 
                         let mid_dist = (sector.start_dist + sector.end_dist) / 2.0;
                         let (tx, ty) = get_lap_coord_at_distance(active_lap, mid_dist);
-                        
+
                         // Find normal vector at this midpoint to offset the label slightly outwards
                         let mid_idx = match active_lap.dist.binary_search_by(|val| {
                             val.partial_cmp(&mid_dist)
@@ -738,19 +758,19 @@ impl OpenDavApp {
                             Ok(i) => i,
                             Err(i) => i.clamp(0, active_lap.dist.len() - 1),
                         };
-                        
+
                         let mut nx = 0.0;
                         let mut ny = 0.0;
                         if mid_idx > 0 && mid_idx < active_lap.x.len() - 1 {
                             let dx = active_lap.x[mid_idx + 1] - active_lap.x[mid_idx - 1];
                             let dy = active_lap.y[mid_idx + 1] - active_lap.y[mid_idx - 1];
-                            let len = (dx*dx + dy*dy).sqrt();
+                            let len = (dx * dx + dy * dy).sqrt();
                             if len > 0.0 {
                                 nx = -dy / len;
                                 ny = dx / len;
                             }
                         }
-                        
+
                         // Shortened name (T1, Str 1-2)
                         let mut short_name = sector.name.clone();
                         if short_name.starts_with("Turn ") {
@@ -758,7 +778,7 @@ impl OpenDavApp {
                         } else if short_name.starts_with("Straight ") {
                             short_name = short_name.replace("Straight ", "Str ");
                         }
-                        
+
                         // Offset the text slightly by 18 meters along normal to fit the box
                         let offset_dist = 18.0;
                         let label_x = tx + nx * offset_dist;
@@ -769,11 +789,11 @@ impl OpenDavApp {
                         let b = plot_ui.plot_bounds();
                         let view_width = b.max()[0] - b.min()[0];
                         let dynamic_font_size = (3750.0 / view_width).clamp(10.0, 20.0) as f32;
-                        
+
                         let mut text_color = theme.text_primary;
                         let bg_color = theme.surface_elevated;
                         let box_text;
-                        
+
                         if show_deltas {
                             if let Some(d) = self.sector_deltas.get(s_idx).copied().flatten() {
                                 if d <= 0.0 {
@@ -817,55 +837,70 @@ impl OpenDavApp {
                     if self.cursor_x.is_some() {
                         let (cx_x, cx_y) = get_lap_coord_at_time(active_lap, lap_rel_time);
                         let p_car = rotate_point(cx_x, cx_y);
-                        
-                        let render_ref_car_dot = |plot_ui: &mut egui_plot::PlotUi, ref_lap: Option<&LapData>, offset: [f64; 2], color: egui::Color32, faint_color: egui::Color32| {
-                            if let Some(r_lap) = ref_lap {
-                                let (rx, ry) = if self.magnify_line_deltas {
-                                    let ref_dist = get_lap_distance_at_time(r_lap, lap_rel_time);
-                                    get_magnified_lap_coord(
-                                        r_lap,
-                                        active_lap,
-                                        ref_dist,
-                                        self.magnifier_multiplier,
-                                    )
-                                } else {
-                                    get_lap_coord_at_time(r_lap, lap_rel_time)
-                                };
-                                let pr = rotate_point(rx + offset[0], ry + offset[1]);
 
-                                // Rubber band
-                                if self.enable_satellite_map {
+                        let render_ref_car_dot =
+                            |plot_ui: &mut egui_plot::PlotUi,
+                             ref_lap: Option<&LapData>,
+                             offset: [f64; 2],
+                             color: egui::Color32,
+                             faint_color: egui::Color32| {
+                                if let Some(r_lap) = ref_lap {
+                                    let (rx, ry) = if self.magnify_line_deltas {
+                                        let ref_dist =
+                                            get_lap_distance_at_time(r_lap, lap_rel_time);
+                                        get_magnified_lap_coord(
+                                            r_lap,
+                                            active_lap,
+                                            ref_dist,
+                                            self.magnifier_multiplier,
+                                        )
+                                    } else {
+                                        get_lap_coord_at_time(r_lap, lap_rel_time)
+                                    };
+                                    let pr = rotate_point(rx + offset[0], ry + offset[1]);
+
+                                    // Rubber band
+                                    if self.enable_satellite_map {
+                                        plot_ui.line(
+                                            Line::new("", vec![p_car, pr])
+                                                .color(satellite_casing)
+                                                .style(egui_plot::LineStyle::Dashed { length: 4.0 })
+                                                .width(3.0),
+                                        );
+                                    }
                                     plot_ui.line(
                                         Line::new("", vec![p_car, pr])
-                                            .color(satellite_casing)
+                                            .color(faint_color)
                                             .style(egui_plot::LineStyle::Dashed { length: 4.0 })
-                                            .width(3.0),
+                                            .width(1.0),
                                     );
-                                }
-                                plot_ui.line(
-                                    Line::new("", vec![p_car, pr])
-                                        .color(faint_color)
-                                        .style(egui_plot::LineStyle::Dashed { length: 4.0 })
-                                        .width(1.0),
-                                );
 
-                                if self.enable_satellite_map {
-                                    plot_ui.points(
-                                        Points::new("", vec![pr])
-                                            .color(satellite_casing)
-                                            .radius(7.875),
-                                    );
+                                    if self.enable_satellite_map {
+                                        plot_ui.points(
+                                            Points::new("", vec![pr])
+                                                .color(satellite_casing)
+                                                .radius(7.875),
+                                        );
+                                    }
+                                    plot_ui
+                                        .points(Points::new("", vec![pr]).color(color).radius(6.0));
                                 }
-                                plot_ui.points(
-                                    Points::new("", vec![pr])
-                                        .color(color)
-                                        .radius(6.0),
-                                );
-                            }
-                        };
+                            };
 
-                        render_ref_car_dot(plot_ui, ref_cyan_lap, cyan_offset, theme.reference_primary, theme.reference_primary_faint);
-                        render_ref_car_dot(plot_ui, ref_white_lap, white_offset, theme.reference_secondary, theme.reference_secondary_faint);
+                        render_ref_car_dot(
+                            plot_ui,
+                            ref_cyan_lap,
+                            cyan_offset,
+                            theme.reference_primary,
+                            theme.reference_primary_faint,
+                        );
+                        render_ref_car_dot(
+                            plot_ui,
+                            ref_white_lap,
+                            white_offset,
+                            theme.reference_secondary,
+                            theme.reference_secondary_faint,
+                        );
 
                         if self.enable_satellite_map {
                             plot_ui.points(
@@ -874,12 +909,8 @@ impl OpenDavApp {
                                     .radius(7.875),
                             );
                         }
-                        plot_ui.points(
-                            Points::new("", vec![p_car])
-                                .color(theme.accent)
-                                .radius(6.0),
-                        );
-
+                        plot_ui
+                            .points(Points::new("", vec![p_car]).color(theme.accent).radius(6.0));
 
                         if self.auto_follow_track_map && !reset_bounds_flag {
                             let bounds = plot_ui.plot_bounds();

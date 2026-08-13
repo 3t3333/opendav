@@ -17,20 +17,22 @@ pub struct LapData {
     pub y: Vec<f64>,
 }
 
-// Highly-optimized O(N) sliding window causal moving average filter 
+// Highly-optimized O(N) sliding window causal moving average filter
 pub fn moving_average(data: &[f64], window: usize) -> Vec<f64> {
     let n = data.len();
     let mut out = vec![0.0; n];
-    if n == 0 { return out; }
+    if n == 0 {
+        return out;
+    }
     let w = window.clamp(1, n);
     let mut running_sum = 0.0;
-    
+
     // Warm up phase
     for i in 0..w {
         running_sum += data[i];
         out[i] = running_sum / (i + 1) as f64;
     }
-    
+
     // Standard phase
     for i in w..n {
         running_sum = running_sum - data[i - w] + data[i];
@@ -40,7 +42,11 @@ pub fn moving_average(data: &[f64], window: usize) -> Vec<f64> {
 }
 
 // Determine which lap the cursor is currently inside (Standalone static helper!)
-pub fn get_active_lap(lap_ranges: &[(i32, f64, f64)], cursor_x: Option<f64>, selected_lap: Option<i32>) -> i32 {
+pub fn get_active_lap(
+    lap_ranges: &[(i32, f64, f64)],
+    cursor_x: Option<f64>,
+    selected_lap: Option<i32>,
+) -> i32 {
     let cx = cursor_x.unwrap_or(0.0);
     for &(lap_num, start_t, end_t) in lap_ranges {
         if cx >= start_t && cx <= end_t {
@@ -52,25 +58,33 @@ pub fn get_active_lap(lap_ranges: &[(i32, f64, f64)], cursor_x: Option<f64>, sel
 
 // Calculates the fastest lap by ignoring the first 3 laps if there are more than 3 laps in the session.
 pub fn get_fastest_lap(lap_times: &[(i32, f64)]) -> i32 {
-    let valid_laps: Vec<&(i32, f64)> = lap_times.iter()
+    let valid_laps: Vec<&(i32, f64)> = lap_times
+        .iter()
         .filter(|(lap_num, dur)| *lap_num > 0 && *dur > 0.0)
         .collect();
-    let filtered: Vec<&(i32, f64)> = valid_laps.iter()
+    let filtered: Vec<&(i32, f64)> = valid_laps
+        .iter()
         .copied()
         .filter(|(lap_num, _)| *lap_num > 3)
         .collect();
     if !filtered.is_empty() {
-        filtered.iter()
+        filtered
+            .iter()
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|val| val.0)
             .unwrap_or(1)
     } else if !valid_laps.is_empty() {
-        valid_laps.iter()
+        valid_laps
+            .iter()
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|val| val.0)
             .unwrap_or(1)
     } else {
-        lap_times.iter().find(|(lap_num, _)| *lap_num > 0).map(|val| val.0).unwrap_or(1)
+        lap_times
+            .iter()
+            .find(|(lap_num, _)| *lap_num > 0)
+            .map(|val| val.0)
+            .unwrap_or(1)
     }
 }
 
@@ -85,7 +99,10 @@ pub fn get_lap_time_at_distance(lap_dist: &[f64], lap_time: &[f64], target_dist:
     if target_dist >= lap_dist[lap_dist.len() - 1] {
         return lap_time[lap_time.len() - 1];
     }
-    match lap_dist.binary_search_by(|val| val.partial_cmp(&target_dist).unwrap_or(std::cmp::Ordering::Equal)) {
+    match lap_dist.binary_search_by(|val| {
+        val.partial_cmp(&target_dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(idx) => lap_time[idx],
         Err(idx) => {
             if idx == 0 {
@@ -114,7 +131,10 @@ pub fn get_lap_coord_at_distance(lap: &LapData, target_dist: f64) -> (f64, f64) 
     if target_dist >= lap.dist[lap.dist.len() - 1] {
         return (lap.x[lap.x.len() - 1], lap.y[lap.y.len() - 1]);
     }
-    match lap.dist.binary_search_by(|val| val.partial_cmp(&target_dist).unwrap_or(std::cmp::Ordering::Equal)) {
+    match lap.dist.binary_search_by(|val| {
+        val.partial_cmp(&target_dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(idx) => (lap.x[idx], lap.y[idx]),
         Err(idx) => {
             if idx == 0 {
@@ -146,7 +166,10 @@ pub fn get_lap_coord_at_time(lap: &LapData, target_time: f64) -> (f64, f64) {
     if target_time >= lap.time[lap.time.len() - 1] {
         return (lap.x[lap.x.len() - 1], lap.y[lap.y.len() - 1]);
     }
-    match lap.time.binary_search_by(|val| val.partial_cmp(&target_time).unwrap_or(std::cmp::Ordering::Equal)) {
+    match lap.time.binary_search_by(|val| {
+        val.partial_cmp(&target_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(idx) => (lap.x[idx], lap.y[idx]),
         Err(idx) => {
             if idx == 0 {
@@ -169,7 +192,12 @@ pub fn get_lap_coord_at_time(lap: &LapData, target_time: f64) -> (f64, f64) {
 
 // Splits a lap's coordinates into multiple continuous segments to prevent drawing straight lines across teleportations/resets
 // Cleaned of egui_plot dependencies: returns pure coordinate points!
-pub fn get_magnified_lap_coord(ref_lap: &LapData, active_lap: &LapData, target_dist: f64, multiplier: f64) -> (f64, f64) {
+pub fn get_magnified_lap_coord(
+    ref_lap: &LapData,
+    active_lap: &LapData,
+    target_dist: f64,
+    multiplier: f64,
+) -> (f64, f64) {
     let (rx, ry) = get_lap_coord_at_distance(ref_lap, target_dist);
     let (ax, ay) = get_lap_coord_at_distance(active_lap, target_dist);
     let dx = rx - ax;
@@ -178,11 +206,20 @@ pub fn get_magnified_lap_coord(ref_lap: &LapData, active_lap: &LapData, target_d
 }
 
 pub fn get_lap_distance_at_time(lap: &LapData, target_time: f64) -> f64 {
-    if lap.time.is_empty() { return 0.0; }
-    if target_time <= lap.time[0] { return lap.dist[0]; }
-    if target_time >= lap.time[lap.time.len() - 1] { return lap.dist[lap.dist.len() - 1]; }
-    
-    match lap.time.binary_search_by(|val| val.partial_cmp(&target_time).unwrap_or(std::cmp::Ordering::Equal)) {
+    if lap.time.is_empty() {
+        return 0.0;
+    }
+    if target_time <= lap.time[0] {
+        return lap.dist[0];
+    }
+    if target_time >= lap.time[lap.time.len() - 1] {
+        return lap.dist[lap.dist.len() - 1];
+    }
+
+    match lap.time.binary_search_by(|val| {
+        val.partial_cmp(&target_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(idx) => lap.dist[idx],
         Err(idx) => {
             let t0 = lap.time[idx - 1];
@@ -195,29 +232,35 @@ pub fn get_lap_distance_at_time(lap: &LapData, target_time: f64) -> f64 {
     }
 }
 
-pub fn get_magnified_lap_segments(ref_lap: &LapData, active_lap: &LapData, multiplier: f64) -> Vec<Vec<[f64; 2]>> {
+pub fn get_magnified_lap_segments(
+    ref_lap: &LapData,
+    active_lap: &LapData,
+    multiplier: f64,
+) -> Vec<Vec<[f64; 2]>> {
     let mut segments = Vec::new();
     let n = ref_lap.x.len();
-    if n == 0 { return segments; }
-    
+    if n == 0 {
+        return segments;
+    }
+
     let max_jump = 50.0;
     let mut current_segment = Vec::new();
-    
+
     let (mx0, my0) = get_magnified_lap_coord(ref_lap, active_lap, ref_lap.dist[0], multiplier);
     current_segment.push([mx0, my0]);
-    
+
     for i in 1..n {
         let (mx1, my1) = get_magnified_lap_coord(ref_lap, active_lap, ref_lap.dist[i], multiplier);
-        
+
         let rx0 = ref_lap.x[i - 1];
         let ry0 = ref_lap.y[i - 1];
         let rx1 = ref_lap.x[i];
         let ry1 = ref_lap.y[i];
-        
+
         let dx = rx1 - rx0;
         let dy = ry1 - ry0;
         let dist = (dx * dx + dy * dy).sqrt();
-        
+
         if dist > max_jump {
             if !current_segment.is_empty() {
                 segments.push(current_segment);
@@ -226,11 +269,11 @@ pub fn get_magnified_lap_segments(ref_lap: &LapData, active_lap: &LapData, multi
         }
         current_segment.push([mx1, my1]);
     }
-    
+
     if !current_segment.is_empty() {
         segments.push(current_segment);
     }
-    
+
     segments
 }
 
@@ -240,22 +283,22 @@ pub fn get_lap_segments(lap: &LapData) -> Vec<Vec<[f64; 2]>> {
     if n == 0 {
         return segments;
     }
-    
+
     let max_jump = 50.0; // 50 meters jump threshold
     let mut current_segment = Vec::new();
-    
+
     current_segment.push([lap.x[0], lap.y[0]]);
-    
+
     for i in 1..n {
         let x0 = lap.x[i - 1];
         let y0 = lap.y[i - 1];
         let x1 = lap.x[i];
         let y1 = lap.y[i];
-        
+
         let dx = x1 - x0;
         let dy = y1 - y0;
         let dist = (dx * dx + dy * dy).sqrt();
-        
+
         if dist > max_jump {
             if !current_segment.is_empty() {
                 segments.push(current_segment);
@@ -264,7 +307,7 @@ pub fn get_lap_segments(lap: &LapData) -> Vec<Vec<[f64; 2]>> {
         }
         current_segment.push([x1, y1]);
     }
-    
+
     if !current_segment.is_empty() {
         segments.push(current_segment);
     }
@@ -283,7 +326,11 @@ pub fn detect_track_sectors(session: &IbtSession, merge_threshold: f64) -> Vec<T
         Some(col) => col,
         None => return sectors,
     };
-    let dist_col = match df.column("Distance_Derived").ok().and_then(|c| c.f64().ok()) {
+    let dist_col = match df
+        .column("Distance_Derived")
+        .ok()
+        .and_then(|c| c.f64().ok())
+    {
         Some(col) => col,
         None => return sectors,
     };
@@ -291,7 +338,11 @@ pub fn detect_track_sectors(session: &IbtSession, merge_threshold: f64) -> Vec<T
         Some(col) => col,
         None => return sectors,
     };
-    let steer_col = match df.column("SteeringWheelAngle").ok().and_then(|c| c.f64().ok()) {
+    let steer_col = match df
+        .column("SteeringWheelAngle")
+        .ok()
+        .and_then(|c| c.f64().ok())
+    {
         Some(col) => col,
         None => return sectors,
     };
@@ -368,9 +419,21 @@ pub fn detect_track_sectors(session: &IbtSession, merge_threshold: f64) -> Vec<T
     if final_corners.is_empty() {
         let s1 = lap_len / 3.0;
         let s2 = 2.0 * lap_len / 3.0;
-        sectors.push(TrackSector { name: "Sector 1".to_string(), start_dist: 0.0, end_dist: s1 });
-        sectors.push(TrackSector { name: "Sector 2".to_string(), start_dist: s1, end_dist: s2 });
-        sectors.push(TrackSector { name: "Sector 3".to_string(), start_dist: s2, end_dist: lap_len });
+        sectors.push(TrackSector {
+            name: "Sector 1".to_string(),
+            start_dist: 0.0,
+            end_dist: s1,
+        });
+        sectors.push(TrackSector {
+            name: "Sector 2".to_string(),
+            start_dist: s1,
+            end_dist: s2,
+        });
+        sectors.push(TrackSector {
+            name: "Sector 3".to_string(),
+            start_dist: s2,
+            end_dist: lap_len,
+        });
         return sectors;
     }
     let first_corner_start = lap_dist[final_corners[0].0];
@@ -412,13 +475,20 @@ pub fn detect_track_sectors(session: &IbtSession, merge_threshold: f64) -> Vec<T
 
 // Highly precise binary search bisector to locate closest index in < 1 microsecond!
 pub fn get_closest_index(distance: &[f64], target_x: f64) -> usize {
-    if distance.is_empty() { return 0; }
-    match distance.binary_search_by(|val| val.partial_cmp(&target_x).unwrap_or(std::cmp::Ordering::Equal)) {
+    if distance.is_empty() {
+        return 0;
+    }
+    match distance.binary_search_by(|val| {
+        val.partial_cmp(&target_x)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(idx) => idx,
         Err(idx) => {
-            if idx <= 0 { 0 }
-            else if idx >= distance.len() { distance.len() - 1 }
-            else {
+            if idx <= 0 {
+                0
+            } else if idx >= distance.len() {
+                distance.len() - 1
+            } else {
                 let d0 = distance[idx - 1];
                 let d1 = distance[idx];
                 if (target_x - d0).abs() < (d1 - target_x).abs() {
@@ -432,17 +502,28 @@ pub fn get_closest_index(distance: &[f64], target_x: f64) -> usize {
 }
 
 // Slice only the cache points that correspond to a specific lap number (Standalone static helper!)
-pub fn get_lap_points_slice<'a>(lap_ranges: &[(i32, f64, f64)], cache: &'a [[f64; 2]], lap_num: i32) -> &'a [[f64; 2]] {
+pub fn get_lap_points_slice<'a>(
+    lap_ranges: &[(i32, f64, f64)],
+    cache: &'a [[f64; 2]],
+    lap_num: i32,
+) -> &'a [[f64; 2]] {
     if let Some(pos) = lap_ranges.iter().position(|r| r.0 == lap_num) {
         let (_, start_t, end_t) = lap_ranges[pos];
-        let start_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&start_t).unwrap_or(std::cmp::Ordering::Equal)) {
+        let start_idx = match cache.binary_search_by(|p| {
+            p[0].partial_cmp(&start_t)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             Ok(i) => i,
             Err(i) => i,
         };
-        let end_idx = match cache.binary_search_by(|p| p[0].partial_cmp(&end_t).unwrap_or(std::cmp::Ordering::Equal)) {
+        let end_idx = match cache.binary_search_by(|p| {
+            p[0].partial_cmp(&end_t)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             Ok(i) => i,
             Err(i) => i,
-        }.min(cache.len());
+        }
+        .min(cache.len());
         &cache[start_idx..end_idx]
     } else {
         &[]
@@ -471,8 +552,12 @@ pub fn format_sector_time(sec: f64) -> String {
 // Spawns a background thread to download the track map SVG from the public iRacing static assets CDN
 pub fn trigger_track_map_download(track_id: i32) {
     let download_enabled = false; // Set to true to re-enable CDN downloading
-    if !download_enabled { return; }
-    if track_id <= 0 { return; }
+    if !download_enabled {
+        return;
+    }
+    if track_id <= 0 {
+        return;
+    }
     std::thread::spawn(move || {
         let dest_dir = std::path::Path::new("exports/track_maps");
         if !dest_dir.exists() {
@@ -482,10 +567,17 @@ pub fn trigger_track_map_download(track_id: i32) {
 
         // Only download if the file does not already exist
         if !dest_file.exists() {
-            println!("Downloading track map SVG for track_id: {} to: {}", track_id, dest_file.display());
-            
+            println!(
+                "Downloading track map SVG for track_id: {} to: {}",
+                track_id,
+                dest_file.display()
+            );
+
             // Try official iRacing static CDN first (requires curl -f to fail on 404/403)
-            let official_url = format!("https://images-static.iracing.com/tracks/{}/track.svg", track_id);
+            let official_url = format!(
+                "https://images-static.iracing.com/tracks/{}/track.svg",
+                track_id
+            );
             let status = std::process::Command::new("curl")
                 .arg("-s")
                 .arg("-f")
@@ -502,7 +594,10 @@ pub fn trigger_track_map_download(track_id: i32) {
 
             // If official CDN fails, automatically fallback to the community GitHub cdn mirror!
             if !success {
-                let fallback_url = format!("https://cdn.jsdelivr.net/gh/iTelemetry/iracing-tracks/svgs/{}.svg", track_id);
+                let fallback_url = format!(
+                    "https://cdn.jsdelivr.net/gh/iTelemetry/iracing-tracks/svgs/{}.svg",
+                    track_id
+                );
                 let _ = std::process::Command::new("curl")
                     .arg("-s")
                     .arg("-f")
@@ -529,20 +624,22 @@ pub fn get_sector_segments(lap: &LapData, start_dist: f64, end_dist: f64) -> Vec
 
     let max_jump = 50.0; // 50 meters jump threshold
     let mut current_segment = Vec::new();
-    
+
     current_segment.push([lap.x[start_idx], lap.y[start_idx]]);
-    
+
     for i in (start_idx + 1)..=end_idx {
-        if i >= lap.x.len() { break; }
+        if i >= lap.x.len() {
+            break;
+        }
         let x0 = lap.x[i - 1];
         let y0 = lap.y[i - 1];
         let x1 = lap.x[i];
         let y1 = lap.y[i];
-        
+
         let dx = x1 - x0;
         let dy = y1 - y0;
         let dist = (dx * dx + dy * dy).sqrt();
-        
+
         if dist > max_jump {
             if !current_segment.is_empty() {
                 segments.push(current_segment);
@@ -551,7 +648,7 @@ pub fn get_sector_segments(lap: &LapData, start_dist: f64, end_dist: f64) -> Vec
         }
         current_segment.push([x1, y1]);
     }
-    
+
     if !current_segment.is_empty() {
         segments.push(current_segment);
     }

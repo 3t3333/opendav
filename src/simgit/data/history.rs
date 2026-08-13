@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::fs;
-use super::setup_parser::SetupData;
 use super::diff::SetupDiff;
+use super::setup_parser::SetupData;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
@@ -26,11 +26,11 @@ pub fn get_history(proj_dir: &Path) -> Vec<HistoryEntry> {
 pub fn commit_files(proj_dir: &Path, files: &[PathBuf]) {
     let mut history = get_history(proj_dir);
     let setups_dir = proj_dir.join("setups");
-    
+
     for file in files {
         if let Some(file_name) = file.file_name() {
             let file_name_str = file_name.to_string_lossy().to_string();
-            
+
             // Check if the file is already in history to prevent duplicates
             if history.iter().any(|entry| entry.file_name == file_name_str) {
                 continue;
@@ -52,13 +52,16 @@ pub fn commit_files(proj_dir: &Path, files: &[PathBuf]) {
                     } else {
                         "<< Baseline Setup".to_string()
                     };
-                    
+
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
 
-                    let track_id = new_data.parameters.get("TrackID").and_then(|s| s.parse::<i32>().ok());
+                    let track_id = new_data
+                        .parameters
+                        .get("TrackID")
+                        .and_then(|s| s.parse::<i32>().ok());
                     if let Some(tid) = track_id {
                         let dest_path = dest.clone();
                         std::thread::spawn(move || {
@@ -68,14 +71,21 @@ pub fn commit_files(proj_dir: &Path, files: &[PathBuf]) {
                             }
                             let dest_file = dest_dir.join(format!("{}.json", tid));
                             if !dest_file.exists() {
-                                println!("Generating track map JSON from telemetry: {}", dest_path.display());
-                                if let Err(e) = crate::signals::track_map_generator::generate_track_map_json(&dest_path, &dest_file) {
+                                println!(
+                                    "Generating track map JSON from telemetry: {}",
+                                    dest_path.display()
+                                );
+                                if let Err(e) =
+                                    crate::signals::track_map_generator::generate_track_map_json(
+                                        &dest_path, &dest_file,
+                                    )
+                                {
                                     eprintln!("Failed to generate JSON track map: {}", e);
                                 }
                             }
                         });
                     }
-                        
+
                     history.push(HistoryEntry {
                         file_name: file_name_str,
                         timestamp,
@@ -86,7 +96,7 @@ pub fn commit_files(proj_dir: &Path, files: &[PathBuf]) {
             }
         }
     }
-    
+
     // Save history
     let history_file = proj_dir.join("setuphistory.json");
     if let Ok(json) = serde_json::to_string_pretty(&history) {
@@ -97,15 +107,14 @@ pub fn commit_files(proj_dir: &Path, files: &[PathBuf]) {
 pub fn remove_file(proj_dir: &Path, file_name: &str) {
     let mut history = get_history(proj_dir);
     history.retain(|e| e.file_name != file_name);
-    
+
     let history_file = proj_dir.join("setuphistory.json");
     if let Ok(json) = serde_json::to_string_pretty(&history) {
         let _ = fs::write(history_file, json);
     }
-    
+
     let file_path = proj_dir.join("setups").join(file_name);
     if file_path.exists() {
         let _ = fs::remove_file(file_path);
     }
 }
-

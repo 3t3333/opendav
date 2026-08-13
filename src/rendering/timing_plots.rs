@@ -8,7 +8,7 @@ impl OpenDavApp {
         let theme = AppTheme::for_mode(is_dark);
 
         if !self.session_loaded || self.sessions.is_empty() {
-            return; 
+            return;
         }
 
         let loaded = &self.sessions[self.primary_session_idx];
@@ -49,7 +49,7 @@ impl OpenDavApp {
 
                                 let mut sector_times = Vec::new();
                                 let mut optimal_time = f64::MAX;
-                                
+
                                 for lap in &loaded.lap_data_cache {
                                     if lap.dist.is_empty() {
                                         continue;
@@ -103,7 +103,7 @@ impl OpenDavApp {
 
                                 let line_points: Vec<[f64; 2]> =
                                     filtered_times.iter().map(|&(l, t)| [l as f64, t]).collect();
-                                
+
                                 let min_t = filtered_times
                                     .iter()
                                     .map(|&(_, t)| t)
@@ -112,7 +112,7 @@ impl OpenDavApp {
                                     .iter()
                                     .map(|&(_, t)| t)
                                     .fold(f64::NEG_INFINITY, f64::max);
-                                
+
                                 let num_bins = 15;
                                 let mut bins = vec![0; num_bins];
                                 let bin_width = if max_t > min_t {
@@ -120,7 +120,7 @@ impl OpenDavApp {
                                 } else {
                                     1.0
                                 };
-                                
+
                                 for &(_, t) in &filtered_times {
                                     let mut bin_idx = ((t - min_t) / bin_width).floor() as usize;
                                     if bin_idx >= num_bins {
@@ -154,23 +154,23 @@ impl OpenDavApp {
                                                     .strong()
                                                     .color(theme.text_secondary),
                                             );
-                                        let line_plot = Plot::new(format!("timing_line_{}", i))
-                                            .height(plot_height)
-                                            .allow_drag(false)
-                                            .allow_zoom(false)
-                                            .allow_scroll(false)
-                                            .allow_boxed_zoom(false)
-                                            .allow_double_click_reset(false)
-                                            .show_x(true)
-                                            .show_y(true)
+                                            let line_plot = Plot::new(format!("timing_line_{}", i))
+                                                .height(plot_height)
+                                                .allow_drag(false)
+                                                .allow_zoom(false)
+                                                .allow_scroll(false)
+                                                .allow_boxed_zoom(false)
+                                                .allow_double_click_reset(false)
+                                                .show_x(true)
+                                                .show_y(true)
                                                 .x_axis_formatter(|tick, _range| {
                                                     format!("Lap {}", tick.value as i32)
                                                 })
                                                 .y_axis_formatter(|tick, _range| {
                                                     format!("{:.2}s", tick.value)
                                                 });
-                                            
-                                        line_plot.show(ui, |plot_ui| {
+
+                                            line_plot.show(ui, |plot_ui| {
                                                 plot_ui.line(
                                                     Line::new(
                                                         "Sector Time",
@@ -179,19 +179,19 @@ impl OpenDavApp {
                                                     .color(theme.accent)
                                                     .width(2.0),
                                                 );
-                                            
-                                            for point in &line_points {
-                                                plot_ui.text(Text::new(
-                                                    format!("LapText_{}_{}", i, point[0]),
-                                                    PlotPoint::new(point[0], point[1]),
-                                                    egui::RichText::new(point[0].to_string())
+
+                                                for point in &line_points {
+                                                    plot_ui.text(Text::new(
+                                                        format!("LapText_{}_{}", i, point[0]),
+                                                        PlotPoint::new(point[0], point[1]),
+                                                        egui::RichText::new(point[0].to_string())
                                                             .color(theme.text_primary)
-                                                        .size(11.0)
+                                                            .size(11.0)
                                                             .strong(),
-                                                ));
-                                            }
+                                                    ));
+                                                }
+                                            });
                                         });
-                                    });
                                 };
                                 let draw_histogram = |ui: &mut egui::Ui| {
                                     egui::Frame::NONE
@@ -207,29 +207,29 @@ impl OpenDavApp {
                                                 .strong()
                                                 .color(theme.text_secondary),
                                             );
-                                        let hist_plot = Plot::new(format!("timing_hist_{}", i))
-                                            .height(plot_height)
-                                            .allow_drag(false)
-                                            .allow_zoom(false)
-                                            .allow_scroll(false)
-                                            .allow_boxed_zoom(false)
-                                            .allow_double_click_reset(false)
-                                            .show_x(true)
-                                            .show_y(true)
+                                            let hist_plot = Plot::new(format!("timing_hist_{}", i))
+                                                .height(plot_height)
+                                                .allow_drag(false)
+                                                .allow_zoom(false)
+                                                .allow_scroll(false)
+                                                .allow_boxed_zoom(false)
+                                                .allow_double_click_reset(false)
+                                                .show_x(true)
+                                                .show_y(true)
                                                 .x_axis_formatter(|tick, _range| {
                                                     format!("{:.2}s", tick.value)
                                                 })
                                                 .y_axis_formatter(|tick, _range| {
                                                     format!("{} laps", tick.value as i32)
                                                 });
-                                            
-                                        hist_plot.show(ui, |plot_ui| {
+
+                                            hist_plot.show(ui, |plot_ui| {
                                                 plot_ui.bar_chart(
                                                     BarChart::new("Frequency", bars.clone())
                                                         .color(theme.brand_secondary),
                                                 );
+                                            });
                                         });
-                                    });
                                 };
 
                                 if ui.available_width() < 720.0 {
@@ -240,7 +240,7 @@ impl OpenDavApp {
                                     ui.columns(2, |cols| {
                                         draw_line_plot(&mut cols[0]);
                                         draw_histogram(&mut cols[1]);
-                                });
+                                    });
                                 }
                             });
                         ui.add_space(15.0);

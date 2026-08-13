@@ -85,7 +85,11 @@ pub fn sample_channel_at_time(pts_cache: &[[f64; 2]], time_sec: f64) -> f64 {
 }
 
 /// Samples parallel series (`dist_series`, `val_series`) at `target_dist` using linear interpolation.
-pub fn sample_channel_at_distance(dist_series: &[f64], val_series: &[f64], target_dist: f64) -> f64 {
+pub fn sample_channel_at_distance(
+    dist_series: &[f64],
+    val_series: &[f64],
+    target_dist: f64,
+) -> f64 {
     if dist_series.is_empty() || val_series.is_empty() {
         return 0.0;
     }
@@ -186,12 +190,18 @@ mod tests {
         let delta = calculate_section_delta_from_cache(&pts, 5.0, 15.0).unwrap();
         assert!((delta - 0.30).abs() < 1e-5);
         assert_eq!(format_section_delta(delta), "+0.300s");
-        assert_eq!(section_delta_color(delta, true), Color32::from_rgb(255, 92, 92));
+        assert_eq!(
+            section_delta_color(delta, true),
+            Color32::from_rgb(255, 92, 92)
+        );
 
         let gained = calculate_section_delta_from_cache(&pts, 15.0, 25.0).unwrap();
         assert!((gained - (-0.20)).abs() < 1e-5);
         assert_eq!(format_section_delta(gained), "-0.200s");
-        assert_eq!(section_delta_color(gained, true), Color32::from_rgb(70, 210, 132));
+        assert_eq!(
+            section_delta_color(gained, true),
+            Color32::from_rgb(70, 210, 132)
+        );
     }
 
     #[test]

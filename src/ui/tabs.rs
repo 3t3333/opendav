@@ -26,7 +26,7 @@ fn report_time_cell(
         ),
         (true, false, true) => (theme.surface_elevated, theme.success, theme.success),
         (true, false, false) => (theme.surface_input, theme.text_primary, theme.border_subtle),
-};
+    };
 
     egui::Frame::NONE
         .fill(fill)
@@ -53,7 +53,7 @@ impl OpenDavApp {
             theme.border_strong
         };
         let available_size = ui.available_size();
-        
+
         egui::Frame::NONE
             .fill(theme.surface_panel)
             .stroke(egui::Stroke::new(3.0, stroke_color))
@@ -88,7 +88,7 @@ impl OpenDavApp {
                             .size(18.0)
                             .color(theme.text_secondary),
                         );
-                        
+
                         ui.add_space(30.0);
                         let browse_btn = egui::Button::new(
                             egui::RichText::new("Browse Files")
@@ -97,9 +97,9 @@ impl OpenDavApp {
                         )
                         .fill(theme.accent)
                         .stroke(egui::Stroke::new(1.0, theme.accent_text))
-                            .corner_radius(12.0)
-                            .min_size(egui::vec2(220.0, 50.0));
-                        
+                        .corner_radius(12.0)
+                        .min_size(egui::vec2(220.0, 50.0));
+
                         if ui.add(browse_btn).clicked() {
                             if let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("iRacing Telemetry", &["ibt"])
@@ -121,7 +121,7 @@ impl OpenDavApp {
                                     .color(theme.text_tertiary),
                             );
                             ui.add_space(15.0);
-                            
+
                             let recent_files = self.settings.recent_files.clone();
                             for recent in recent_files {
                                 let file_name = std::path::Path::new(&recent)
@@ -135,9 +135,9 @@ impl OpenDavApp {
                                 )
                                 .fill(theme.surface_card)
                                 .stroke(egui::Stroke::new(1.0, theme.border_subtle))
-                                    .corner_radius(8.0)
-                                    .min_size(egui::vec2(300.0, 45.0));
-                                    
+                                .corner_radius(8.0)
+                                .min_size(egui::vec2(300.0, 45.0));
+
                                 if ui.add(btn).on_hover_text(&recent).clicked() {
                                     self.load_telemetry_file(std::path::Path::new(&recent));
                                 }
@@ -190,9 +190,9 @@ impl OpenDavApp {
                         .strong()
                         .color(theme.text_primary),
                 );
-        ui.add_space(8.0);
+                ui.add_space(8.0);
 
-        // 1. Session Metadata Grid Card
+                // 1. Session Metadata Grid Card
                 egui::Frame::group(ui.style())
                     .fill(theme.surface_card)
                     .stroke(egui::Stroke::new(1.0, theme.border_subtle))
@@ -228,32 +228,32 @@ impl OpenDavApp {
                                         ui.label(
                                             egui::RichText::new(*value).strong().color(*color),
                                         );
-                });
+                                    });
                                     if (index + 1) % columns == 0 {
                                         ui.end_row();
                                     }
                                 }
-            });
-        });
+                            });
+                    });
 
-        ui.add_space(10.0);
+                ui.add_space(10.0);
 
-        // 2. High-End Session Statistics Cards
-                    let avg_lap = {
+                // 2. High-End Session Statistics Cards
+                let avg_lap = {
                     let filtered: Vec<&(i32, f64)> = lap_times
                         .iter()
-                            .filter(|(lap_num, _)| *lap_num > 3)
-                            .collect();
-                        if !filtered.is_empty() {
-                            let sum: f64 = filtered.iter().map(|val| val.1).sum();
-                            sum / filtered.len() as f64
-                        } else if !lap_times.is_empty() {
-                            let sum: f64 = lap_times.iter().map(|val| val.1).sum();
-                            sum / lap_times.len() as f64
-                        } else {
-                            0.0
-                        }
-                    };
+                        .filter(|(lap_num, _)| *lap_num > 3)
+                        .collect();
+                    if !filtered.is_empty() {
+                        let sum: f64 = filtered.iter().map(|val| val.1).sum();
+                        sum / filtered.len() as f64
+                    } else if !lap_times.is_empty() {
+                        let sum: f64 = lap_times.iter().map(|val| val.1).sum();
+                        sum / lap_times.len() as f64
+                    } else {
+                        0.0
+                    }
+                };
                 let statistics = [
                     (
                         "TOTAL SESSION TIME",
@@ -297,31 +297,31 @@ impl OpenDavApp {
                                                 .small()
                                                 .strong(),
                                         );
-                    ui.add_space(4.0);
+                                        ui.add_space(4.0);
                                         ui.heading(
                                             egui::RichText::new(value).strong().color(*color),
                                         );
-                });
-            });
+                                    });
+                                });
                             if (index + 1) % statistic_columns == 0 {
                                 ui.end_row();
                             }
                         }
-        });
+                    });
 
-        ui.add_space(15.0);
+                ui.add_space(15.0);
 
-        let fastest_lap = get_fastest_lap(&lap_times);
+                let fastest_lap = get_fastest_lap(&lap_times);
 
-        // 3. Stacked lower Dashboard (Top: Laps List, Bottom: Huge Track Map SVG!)
-        ui.vertical(|ui| {
+                // 3. Stacked lower Dashboard (Top: Laps List, Bottom: Huge Track Map SVG!)
+                ui.vertical(|ui| {
                     ui.label(
                         egui::RichText::new("VALID LAP SHEET")
                             .color(theme.text_secondary)
                             .strong()
                             .size(11.0),
                     );
-            ui.add_space(4.0);
+                    ui.add_space(4.0);
 
                     let lap_columns = match ui.available_width() {
                         width if width >= 900.0 => 4,
@@ -332,51 +332,51 @@ impl OpenDavApp {
                     egui::ScrollArea::vertical()
                         .max_height(240.0)
                         .show(ui, |ui| {
-                egui::Grid::new("valid_laps_grid")
+                            egui::Grid::new("valid_laps_grid")
                                 .num_columns(lap_columns)
                                 .min_col_width(
                                     (ui.available_width() - 24.0 * (lap_columns - 1) as f32)
                                         / lap_columns as f32,
                                 )
-                    .spacing([24.0, 10.0])
-                    .show(ui, |ui| {
-                        let mut col_count = 0;
-                        for (lap_num, duration) in &lap_times {
-                            let is_fastest = *lap_num == fastest_lap;
+                                .spacing([24.0, 10.0])
+                                .show(ui, |ui| {
+                                    let mut col_count = 0;
+                                    for (lap_num, duration) in &lap_times {
+                                        let is_fastest = *lap_num == fastest_lap;
                                         let is_selected = self.selected_lap
                                             == Some((self.primary_session_idx, *lap_num));
-                            
+
                                         let mut row_text = format!(
                                             "Lap {} : {}",
                                             lap_num,
                                             format_lap_time(*duration)
                                         );
-                            if is_fastest {
-                                row_text += " FASTEST";
-                            }
-                            
+                                        if is_fastest {
+                                            row_text += " FASTEST";
+                                        }
+
                                         let (fill_color, row_color, border_color) = if is_selected {
                                             (theme.accent, theme.on_accent, theme.accent_text)
-                            } else if is_fastest {
+                                        } else if is_fastest {
                                             (
                                                 theme.surface_elevated,
                                                 theme.brand_secondary,
                                                 theme.brand_secondary,
                                             )
-                            } else {
+                                        } else {
                                             (
                                                 theme.surface_card,
                                                 theme.text_primary,
                                                 theme.border_subtle,
                                             )
-                            };
-                            
+                                        };
+
                                         let btn_resp = egui::Frame::NONE
                                             .fill(fill_color)
-                                .stroke(egui::Stroke::new(1.0, border_color))
+                                            .stroke(egui::Stroke::new(1.0, border_color))
                                             .corner_radius(4.0)
-                                .inner_margin(egui::Margin::symmetric(6, 3))
-                                .show(ui, |ui| {
+                                            .inner_margin(egui::Margin::symmetric(6, 3))
+                                            .show(ui, |ui| {
                                                 ui.selectable_label(
                                                     false,
                                                     egui::RichText::new(row_text)
@@ -386,7 +386,7 @@ impl OpenDavApp {
                                             })
                                             .inner;
 
-                            if btn_resp.clicked() {
+                                        if btn_resp.clicked() {
                                             self.selected_lap =
                                                 Some((self.primary_session_idx, *lap_num));
                                             if let Some(pos) = self.sessions
@@ -398,48 +398,48 @@ impl OpenDavApp {
                                                 let (_, start_t, _end_t) = self.sessions
                                                     [self.primary_session_idx]
                                                     .lap_ranges[pos];
-                                    self.cursor_x = Some(start_t);
-                                    self.reset_bounds_flag = true;
-                                    self.reset_bounds_next_frame = 3;
-                                    self.reset_track_map_bounds_flag = true;
-                                    self.reset_track_map_bounds_next_frame = 3;
-                                }
-                                self.update_sector_deltas();
+                                                self.cursor_x = Some(start_t);
+                                                self.reset_bounds_flag = true;
+                                                self.reset_bounds_next_frame = 3;
+                                                self.reset_track_map_bounds_flag = true;
+                                                self.reset_track_map_bounds_next_frame = 3;
+                                            }
+                                            self.update_sector_deltas();
                                             self.update_lap_deltas();
-                            }
-                            
-                            col_count += 1;
-                                        if col_count >= lap_columns {
-                                ui.end_row();
-                                col_count = 0;
-                            }
-                        }
-                    });
-            });
-        });
+                                        }
 
-        ui.add_space(15.0);
+                                        col_count += 1;
+                                        if col_count >= lap_columns {
+                                            ui.end_row();
+                                            col_count = 0;
+                                        }
+                                    }
+                                });
+                        });
+                });
+
+                ui.add_space(15.0);
                 ui.label(
                     egui::RichText::new(venue.to_uppercase())
                         .color(theme.text_secondary)
                         .strong()
                         .size(11.0),
                 );
-        ui.add_space(4.0);
+                ui.add_space(4.0);
 
                 egui::Frame::group(ui.style())
                     .fill(theme.surface_card)
                     .stroke(egui::Stroke::new(1.0, theme.border_subtle))
                     .show(ui, |ui| {
-            self.draw_interactive_track_map(
-                ui,
-                340.0,
-                crate::rendering::track_map::TrackMapPlacement::Inline,
-            );
-        });
+                        self.draw_interactive_track_map(
+                            ui,
+                            340.0,
+                            crate::rendering::track_map::TrackMapPlacement::Inline,
+                        );
+                    });
 
-        ui.add_space(15.0);
-        ui.vertical_centered(|ui| {
+                ui.add_space(15.0);
+                ui.vertical_centered(|ui| {
                     let open_graphs = egui::Button::new(
                         egui::RichText::new("📈 OPEN GRAPHS WORKSPACE")
                             .strong()
@@ -452,25 +452,25 @@ impl OpenDavApp {
                     .min_size(egui::vec2(240.0, 36.0));
 
                     if ui.add(open_graphs).clicked() {
-                self.active_page = ActivePage::Graphs;
-                let p_idx = self.primary_session_idx;
-                if p_idx < self.sessions.len() {
-                    let fastest = get_fastest_lap(&self.sessions[p_idx].session.lap_times);
+                        self.active_page = ActivePage::Graphs;
+                        let p_idx = self.primary_session_idx;
+                        if p_idx < self.sessions.len() {
+                            let fastest = get_fastest_lap(&self.sessions[p_idx].session.lap_times);
                             self.selected_lap = if fastest > 0 {
                                 Some((p_idx, fastest))
                             } else {
                                 None
                             };
-                    self.visible_x_range = None;
-                    self.reset_bounds_flag = true;
-                    self.reset_bounds_next_frame = 3;
-                    self.reset_track_map_bounds_flag = true;
-                    self.reset_track_map_bounds_next_frame = 3;
+                            self.visible_x_range = None;
+                            self.reset_bounds_flag = true;
+                            self.reset_bounds_next_frame = 3;
+                            self.reset_track_map_bounds_flag = true;
+                            self.reset_track_map_bounds_next_frame = 3;
                             self.update_sector_deltas();
                             self.update_lap_deltas();
-                }
-            }
-        });
+                        }
+                    }
+                });
             });
     }
 
@@ -511,11 +511,7 @@ impl OpenDavApp {
                 WorksheetTab::Vehicle,
                 "2. Vehicle",
             );
-            ui.selectable_value(
-                &mut self.active_worksheet,
-                WorksheetTab::Tyre,
-                "3. Tyre",
-            );
+            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Tyre, "3. Tyre");
             ui.selectable_value(
                 &mut self.active_worksheet,
                 WorksheetTab::Shocks,
@@ -613,65 +609,65 @@ impl OpenDavApp {
 
         match self.active_reports_tab {
             crate::ReportsTab::SectorAnalysis => {
-        let has_data = {
-            let loaded = &self.sessions[self.primary_session_idx];
-            !loaded.lap_data_cache.is_empty() && !loaded.sectors.is_empty()
-        };
+                let has_data = {
+                    let loaded = &self.sessions[self.primary_session_idx];
+                    !loaded.lap_data_cache.is_empty() && !loaded.sectors.is_empty()
+                };
 
-        if !has_data {
+                if !has_data {
                     ui.label(
                         egui::RichText::new("No sector or lap data available for report.")
                             .color(theme.text_secondary),
                     );
-        } else {
-            ui.vertical(|ui| {
-                let loaded = &self.sessions[self.primary_session_idx];
+                } else {
+                    ui.vertical(|ui| {
+                        let loaded = &self.sessions[self.primary_session_idx];
                         let mut visible_laps: Vec<&crate::signals::processing::LapData> = loaded
                             .lap_data_cache
                             .iter()
-                    .filter(|lap| lap.lap_num > 3)
-                    .collect();
-                if visible_laps.is_empty() {
-                    visible_laps = loaded.lap_data_cache.iter().collect();
-                }
+                            .filter(|lap| lap.lap_num > 3)
+                            .collect();
+                        if visible_laps.is_empty() {
+                            visible_laps = loaded.lap_data_cache.iter().collect();
+                        }
 
                         let best_total_time = visible_laps
                             .iter()
-                    .map(|lap| lap.time.last().copied().unwrap_or(0.0))
-                    .filter(|&t| t > 0.0)
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(0.0);
+                            .map(|lap| lap.time.last().copied().unwrap_or(0.0))
+                            .filter(|&t| t > 0.0)
+                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .unwrap_or(0.0);
 
-                egui::ScrollArea::both()
-                    .id_salt("sector_report_scroll")
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                            egui::Grid::new("sector_report_grid")
-                                .min_col_width(85.0)
-                                .spacing([20.0, 12.0])
-                                .show(ui, |ui| {
-                                    // Header Row
+                        egui::ScrollArea::both()
+                            .id_salt("sector_report_scroll")
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                egui::Grid::new("sector_report_grid")
+                                    .min_col_width(85.0)
+                                    .spacing([20.0, 12.0])
+                                    .show(ui, |ui| {
+                                        // Header Row
                                         ui.label(
                                             egui::RichText::new("Sector / Corner")
                                                 .strong()
                                                 .color(theme.text_primary),
                                         );
-                                    for lap in &visible_laps {
+                                        for lap in &visible_laps {
                                             ui.label(
                                                 egui::RichText::new(format!("Lap {}", lap.lap_num))
                                                     .strong()
                                                     .color(theme.text_primary),
                                             );
-                                    }
+                                        }
                                         ui.label(
                                             egui::RichText::new("Optimal")
                                                 .strong()
                                                 .color(theme.accent_text),
                                         );
-                                    ui.end_row();
+                                        ui.end_row();
 
-                                    // Sector split rows
-                                    for (s_idx, sector) in loaded.sectors.iter().enumerate() {
+                                        // Sector split rows
+                                        for (s_idx, sector) in loaded.sectors.iter().enumerate() {
                                             ui.label(
                                                 egui::RichText::new(&sector.name)
                                                     .strong()
@@ -684,7 +680,7 @@ impl OpenDavApp {
                                                 .copied()
                                                 .unwrap_or(0.0);
 
-                                        for lap in &visible_laps {
+                                            for lap in &visible_laps {
                                                 let t_start = get_lap_time_at_distance(
                                                     &lap.dist,
                                                     &lap.time,
@@ -695,7 +691,7 @@ impl OpenDavApp {
                                                     &lap.time,
                                                     sector.end_dist,
                                                 );
-                                            let s_time = t_end - t_start;
+                                                let s_time = t_end - t_start;
 
                                                 let is_session_best = s_time > 0.0
                                                     && (s_time - best_s_time).abs() < 1e-4;
@@ -710,7 +706,7 @@ impl OpenDavApp {
                                                     is_session_best,
                                                     is_near_best,
                                                 );
-                                        }
+                                            }
 
                                             report_time_cell(
                                                 ui,
@@ -720,16 +716,16 @@ impl OpenDavApp {
                                                 best_s_time > 0.0,
                                                 false,
                                             );
-                                        ui.end_row();
-                                    }
+                                            ui.end_row();
+                                        }
 
-                                    // Totals Row
+                                        // Totals Row
                                         ui.label(
                                             egui::RichText::new("TOTAL")
                                                 .strong()
                                                 .color(theme.accent_text),
                                         );
-                                    for lap in &visible_laps {
+                                        for lap in &visible_laps {
                                             let total_time =
                                                 lap.time.last().copied().unwrap_or(0.0);
 
@@ -746,9 +742,9 @@ impl OpenDavApp {
                                                 is_total_best,
                                                 is_total_near_best,
                                             );
-                                    }
+                                        }
 
-                                    let optimal_total = loaded.sector_bests.iter().sum::<f64>();
+                                        let optimal_total = loaded.sector_bests.iter().sum::<f64>();
                                         report_time_cell(
                                             ui,
                                             theme,
@@ -757,11 +753,11 @@ impl OpenDavApp {
                                             optimal_total > 0.0,
                                             false,
                                         );
-                                    ui.end_row();
+                                        ui.end_row();
+                                    });
                             });
-                    });
-                
-                ui.add_space(20.0);
+
+                        ui.add_space(20.0);
 
                         let venue_name = self.sessions[self.primary_session_idx]
                             .session
@@ -772,24 +768,24 @@ impl OpenDavApp {
                                 .strong()
                                 .color(theme.accent_text),
                         );
-                ui.add_space(8.0);
+                        ui.add_space(8.0);
                         egui::Frame::group(ui.style())
                             .fill(theme.surface_card)
                             .stroke(egui::Stroke::new(1.0, theme.border_subtle))
                             .show(ui, |ui| {
-                    let map_height = ui.available_height().max(300.0);
-                    self.draw_interactive_track_map(
-                        ui,
-                        map_height,
-                        crate::rendering::track_map::TrackMapPlacement::Inline,
-                    );
-                });
-            });
-        }
-    }
-        crate::ReportsTab::TimingGraphs => {
-            self.draw_timing_graphs_page(ui, is_dark);
-        }
+                                let map_height = ui.available_height().max(300.0);
+                                self.draw_interactive_track_map(
+                                    ui,
+                                    map_height,
+                                    crate::rendering::track_map::TrackMapPlacement::Inline,
+                                );
+                            });
+                    });
+                }
+            }
+            crate::ReportsTab::TimingGraphs => {
+                self.draw_timing_graphs_page(ui, is_dark);
+            }
         }
     }
 }

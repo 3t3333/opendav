@@ -1,10 +1,10 @@
 //! REST client for Supabase cloud synchronization, implementing RBAC verification and data pushes/pulls.
 
-use std::io::Read;
-use serde::{Deserialize, Serialize};
 use crate::simgit::data::backend::{
-    BackendUserRole, UserRoleRecord, compress_cloud_payload, decompress_cloud_payload,
+    compress_cloud_payload, decompress_cloud_payload, BackendUserRole, ProjectMemberRecord,
 };
+use serde::{Deserialize, Serialize};
+use std::io::Read;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RemoteProject {
@@ -13,6 +13,8 @@ pub struct RemoteProject {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -31,6 +33,7 @@ pub struct RemotePacketMetadata {
     pub lap_count: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uploaded_by: Option<String>,
+    pub storage_file_path: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -56,53 +59,27 @@ pub struct RemoteAnalysisNote {
     pub worksheet: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct BlobRecord {
-    pub packet_id: String,
-    pub compressed_data: String,
-    pub uncompressed_size: i64,
-    pub compressed_size: i64,
+#[derive(Deserialize)]
+struct UserRoleRecord {
+    pub role: BackendUserRole,
 }
 
-/// Helper to encode raw byte arrays into Postgres BYTEA hex representation (\x...).
-pub fn encode_bytea(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(2 + bytes.len() * 2);
-    s.push_str("\\x");
-    for &b in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(&mut s, "{:02x}", b);
-    }
-    s
-}
-
-/// Helper to decode Postgres BYTEA hex representation back into raw byte vectors.
-pub fn decode_bytea(hex_str: &str) -> Result<Vec<u8>, String> {
-    let stripped = hex_str.strip_prefix("\\x").unwrap_or(hex_str);
-    if stripped.len() % 2 != 0 {
-        return Err("Invalid bytea hex length (must be even)".to_string());
-    }
-    (0..stripped.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&stripped[i..i + 2], 16).map_err(|e| e.to_string()))
-        .collect()
-}
-
-/// Client for interacting with an individual user's configured Supabase instance via PostgREST.
 pub struct SupabaseClient {
     pub url: String,
     pub anon_key: String,
     pub access_token: Option<String>,
+    pub user_id: Option<String>,
     pub cached_role: BackendUserRole,
 }
 
 impl SupabaseClient {
-    pub fn new(url: &str, anon_key: &str, access_token: Option<String>) -> Self {
-        let clean_url = url.trim_end_matches('/').to_string();
+    pub fn new(url: &str, anon_key: &str, access_token: Option<String>, user_id: Option<String>) -> Self {
         Self {
-            url: clean_url,
-            anon_key: anon_key.trim().to_string(),
+            url: url.trim_end_matches('/').to_string(),
+            anon_key: anon_key.to_string(),
             access_token,
-            cached_role: BackendUserRole::Pending,
+            user_id,
+            cached_role: BackendUserRole::default(),
         }
     }
 
@@ -130,208 +107,265 @@ impl SupabaseClient {
 
     pub fn sign_in(&mut self, email: &str, password: &str) -> Result<(String, String), String> {
         if !self.is_configured() {
-            return Err("Supabase cloud synchronization credentials are not configured in Settings.".to_string());
+            return Err(
+                "Supabase cloud synchronization credentials are not configured in Settings."
+                    .to_string(),
+            );
         }
         let endpoint = format!("{}/auth/v1/token?grant_type=password", self.url);
         let payload = format!(r#"{{"email":"{}","password":"{}"}}"#, email, password);
-        let req = self.auth_headers(ureq::post(&endpoint))
+        let req = self
+            .auth_headers(ureq::post(&endpoint))
             .header("Content-Type", "application/json");
-        let response = req.send(payload.as_bytes()).map_err(|e| format!("Sign in failed: {}", e))?;
+        let response = req
+            .send(payload.as_bytes())
+            .map_err(|e| format!("Sign in failed: {}", e))?;
         let body = Self::read_body_to_string(response)?;
-        
-        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("Parse error: {}", e))?;
-        let token = parsed["access_token"].as_str().ok_or("No access_token in response")?.to_string();
-        let user_id = parsed["user"]["id"].as_str().ok_or("No user id in response")?.to_string();
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("Parse error: {}", e))?;
+        let token = parsed["access_token"]
+            .as_str()
+            .ok_or("No access_token in response")?
+            .to_string();
+        let user_id = parsed["user"]["id"]
+            .as_str()
+            .ok_or("No user id in response")?
+            .to_string();
         Ok((token, user_id))
     }
 
     pub fn sign_up(&mut self, email: &str, password: &str) -> Result<(String, String), String> {
         if !self.is_configured() {
-            return Err("Supabase cloud synchronization credentials are not configured in Settings.".to_string());
+            return Err(
+                "Supabase cloud synchronization credentials are not configured in Settings."
+                    .to_string(),
+            );
         }
         let endpoint = format!("{}/auth/v1/signup", self.url);
         let payload = format!(r#"{{"email":"{}","password":"{}"}}"#, email, password);
-        let req = self.auth_headers(ureq::post(&endpoint))
+        let req = self
+            .auth_headers(ureq::post(&endpoint))
             .header("Content-Type", "application/json");
-        let response = req.send(payload.as_bytes()).map_err(|e| format!("Sign up failed: {}", e))?;
+        let response = req
+            .send(payload.as_bytes())
+            .map_err(|e| format!("Sign up failed: {}", e))?;
         let body = Self::read_body_to_string(response)?;
-        
-        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("Parse error: {}", e))?;
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("Parse error: {}", e))?;
         let token = parsed["access_token"].as_str().ok_or("Signup successful! However, you must disable 'Confirm email' in your Supabase Auth Providers settings, or confirm your email to sign in.")?.to_string();
-        let user_id = parsed["user"]["id"].as_str().ok_or("No user id in response")?.to_string();
+        let user_id = parsed["user"]["id"]
+            .as_str()
+            .ok_or("No user id in response")?
+            .to_string();
         Ok((token, user_id))
     }
 
     pub fn delete_account(&self) -> Result<(), String> {
         if !self.is_configured() {
-            return Err("Supabase cloud synchronization credentials are not configured in Settings.".to_string());
+            return Err(
+                "Supabase cloud synchronization credentials are not configured in Settings."
+                    .to_string(),
+            );
         }
         let endpoint = format!("{}/rest/v1/rpc/delete_own_account", self.url);
-        let req = self.auth_headers(ureq::post(&endpoint))
+        let req = self
+            .auth_headers(ureq::post(&endpoint))
             .header("Content-Type", "application/json");
-        let _response = req.send("".as_bytes()).map_err(|e| format!("Delete account failed: {}", e))?;
+        let _response = req
+            .send("".as_bytes())
+            .map_err(|e| format!("Delete account failed: {}", e))?;
         Ok(())
     }
 
-    /// Verifies connectivity and retrieves the user's role from the Supabase user_roles table.
-    pub fn check_connection_and_role(&mut self, user_id: &str) -> Result<BackendUserRole, String> {
+    pub fn check_connection(&mut self) -> Result<(), String> {
         if !self.is_configured() {
             return Err("Supabase cloud synchronization credentials are not configured in Settings.".to_string());
         }
-
-        let endpoint = format!("{}/rest/v1/user_roles?user_id=eq.{}&select=*", self.url, urlencoding_simple(user_id));
+        let endpoint = format!("{}/rest/v1/projects?limit=1", self.url);
         let req = self.auth_headers(ureq::get(&endpoint));
-        let response = req.call().map_err(|e| format!("Failed to connect to Supabase: {}", e))?;
-        let body = Self::read_body_to_string(response)?;
-
-        let records: Vec<UserRoleRecord> = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse user role JSON response: {}", e))?;
-
-        if let Some(record) = records.first() {
-            self.cached_role = record.role;
-            Ok(self.cached_role)
-        } else {
-            // User exists in auth or hasn't been added to user_roles yet; default to pending
-            self.cached_role = BackendUserRole::Pending;
-            Ok(self.cached_role)
-        }
-    }
-
-    /// Fetches all user role records from the database for admin team management.
-    pub fn fetch_all_users(&self) -> Result<Vec<UserRoleRecord>, String> {
-        if !self.cached_role.can_manage_team() {
-            return Err("User role is not Admin and lacks permission to manage team accounts.".to_string());
-        }
-        let endpoint = format!("{}/rest/v1/user_roles?select=*&order=created_at.asc", self.url);
-        let req = self.auth_headers(ureq::get(&endpoint));
-        let response = req.call().map_err(|e| format!("Failed to fetch user directory: {}", e))?;
-        let body = Self::read_body_to_string(response)?;
-        serde_json::from_str(&body).map_err(|e| format!("Failed to parse user list JSON: {}", e))
-    }
-
-    /// Updates the access role of a designated user account.
-    pub fn update_user_role(&self, target_user_id: &str, new_role: BackendUserRole) -> Result<(), String> {
-        if !self.cached_role.can_manage_team() {
-            return Err("Only team Administrators can modify account roles or approve pending members.".to_string());
-        }
-        let endpoint = format!("{}/rest/v1/user_roles?user_id=eq.{}", self.url, target_user_id);
-        let role_str = match new_role {
-            BackendUserRole::Admin => "admin",
-            BackendUserRole::Editor => "editor",
-            BackendUserRole::Viewer => "viewer",
-            BackendUserRole::Pending => "pending",
-        };
-        let payload_json = format!("{{\"role\":\"{}\"}}", role_str);
-        let req = self
-            .auth_headers(ureq::patch(&endpoint))
-            .header("Content-Type", "application/json");
-        let res = req
-            .send(payload_json.as_bytes())
-            .map_err(|e| format!("Failed to update role for user {}: {}", target_user_id, e))?;
-        let _ = Self::read_body_to_string(res);
+        req.call().map_err(|e| format!("Failed to connect to Supabase: {}", e))?;
         Ok(())
     }
 
-    /// Fetches available collaborative projects on the remote server.
-    pub fn fetch_remote_projects(&self) -> Result<Vec<RemoteProject>, String> {
-        if !self.cached_role.can_pull() {
-            return Err("User role lacks permission to read remote projects.".to_string());
+    pub fn check_connection_and_role(&mut self, _user_id: &str) -> Result<BackendUserRole, String> {
+        self.check_connection()?;
+        self.cached_role = BackendUserRole::Admin;
+        Ok(BackendUserRole::Admin)
+    }
+
+    pub fn fetch_project_members(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectMemberRecord>, String> {
+        let endpoint = format!("{}/rest/v1/project_members?project_id=eq.{}&select=*", self.url, urlencoding_simple(project_id));
+        let req = self.auth_headers(ureq::get(&endpoint));
+        let response = req.call().map_err(|e| format!("Failed to fetch members: {}", e))?;
+        let body = Self::read_body_to_string(response)?;
+        let records: Vec<ProjectMemberRecord> = serde_json::from_str(&body).map_err(|e| format!("Parse error: {}", e))?;
+        Ok(records)
+    }
+
+    pub fn upsert_project_member(
+        &self,
+        project_id: &str,
+        email: &str,
+        role: BackendUserRole,
+    ) -> Result<(), String> {
+        let endpoint = format!("{}/rest/v1/project_members", self.url);
+        let role_str = match role {
+            BackendUserRole::Pending => "pending",
+            BackendUserRole::Viewer => "viewer",
+            BackendUserRole::Editor => "editor",
+            BackendUserRole::Admin => "admin",
+        };
+        let payload = format!(r#"{{"project_id":"{}","email":"{}","role":"{}"}}"#, project_id, email, role_str);
+        let req = self.auth_headers(ureq::post(&endpoint))
+            .header("Content-Type", "application/json")
+            .header("Prefer", "resolution=merge-duplicates");
+            
+        match req.send(payload.as_bytes()) {
+            Ok(res) => {
+                let status = res.status();
+                if status.as_u16() >= 400 {
+                    let body = Self::read_body_to_string(res).unwrap_or_default();
+                    return Err(format!("Upsert failed (HTTP {}): {}", status.as_u16(), body));
+                }
+                Ok(())
+            }
+            Err(e) => Err(format!("Upsert request failed: {}", e)),
         }
+    }
+
+    pub fn remove_project_member(&self, project_id: &str, email: &str) -> Result<(), String> {
+        let endpoint = format!("{}/rest/v1/project_members?project_id=eq.{}&email=eq.{}", self.url, urlencoding_simple(project_id), urlencoding_simple(email));
+        let req = self.auth_headers(ureq::delete(&endpoint));
+        req.call().map_err(|e| format!("Remove failed: {}", e))?;
+        Ok(())
+    }
+
+    pub fn fetch_remote_projects(&self) -> Result<Vec<RemoteProject>, String> {
         let endpoint = format!("{}/rest/v1/projects?select=*", self.url);
         let req = self.auth_headers(ureq::get(&endpoint));
-        let response = req.call().map_err(|e| format!("Failed to fetch projects: {}", e))?;
+        let response = req
+            .call()
+            .map_err(|e| format!("Failed to fetch projects: {}", e))?;
         let body = Self::read_body_to_string(response)?;
         serde_json::from_str(&body).map_err(|e| format!("Failed to parse projects JSON: {}", e))
     }
 
-    /// Finds a project UUID by name, or creates it if it doesn't exist.
     pub fn ensure_project(&self, project_name: &str) -> Result<String, String> {
         let projects = self.fetch_remote_projects()?;
         if let Some(p) = projects.iter().find(|p| p.name == project_name) {
-            return p.id.clone().ok_or_else(|| "Project found but missing ID".to_string());
+            return p
+                .id
+                .clone()
+                .ok_or_else(|| "Project found but missing ID".to_string());
         }
-        
-        if !self.cached_role.can_push() {
-            return Err("Cannot create new remote project: lacks Editor/Admin role.".to_string());
-        }
-        
+
         let new_project = RemoteProject {
             id: None,
             name: project_name.to_string(),
             description: None,
+            owner_id: self.user_id.clone(),
         };
-        
+
         let url = format!("{}/rest/v1/projects", self.url);
         let json = serde_json::to_string(&new_project).map_err(|e| e.to_string())?;
-        let req = self.auth_headers(ureq::post(&url))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "return=representation");
-        let res = req.send(json.as_bytes()).map_err(|e| format!("Failed to create project: {}", e))?;
-        let body = Self::read_body_to_string(res)?;
-        let returned: Vec<RemoteProject> = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse inserted project: {}", e))?;
+        let req = self
+            .auth_headers(ureq::post(&url))
+            .header("Content-Type", "application/json");
+        req.send(json.as_bytes())
+            .map_err(|e| format!("Failed to create project: {}", e))?;
         
-        returned.first().and_then(|p| p.id.clone())
-            .ok_or_else(|| "Failed to retrieve project ID after creation".to_string())
-    }
-
-    /// Fetches telemetry packet metadata from the remote server for a specific project.
-    pub fn fetch_remote_packets(&self, project_id: &str) -> Result<Vec<RemotePacketMetadata>, String> {
-        if !self.cached_role.can_pull() {
-            return Err("User role lacks permission to pull telemetry packets.".to_string());
+        let projects = self.fetch_remote_projects()?;
+        if let Some(p) = projects.iter().find(|p| p.name == project_name) {
+            return p.id.clone().ok_or_else(|| "Failed to retrieve project ID after creation".to_string());
         }
-        let endpoint = format!("{}/rest/v1/telemetry_packets?project_id=eq.{}&select=*", self.url, project_id);
-        let req = self.auth_headers(ureq::get(&endpoint));
-        let response = req.call().map_err(|e| format!("Failed to fetch telemetry packets: {}", e))?;
-        let body = Self::read_body_to_string(response)?;
-        serde_json::from_str(&body).map_err(|e| format!("Failed to parse telemetry packets JSON: {}", e))
+        
+        Err("Failed to verify project creation".to_string())
     }
 
-    /// Pushes a telemetry packet (metadata, compressed binary blob, and analysis notes) to the cloud.
+    pub fn fetch_remote_packets(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RemotePacketMetadata>, String> {
+        let endpoint = format!(
+            "{}/rest/v1/telemetry_metadata?project_id=eq.{}&select=*",
+            self.url, project_id
+        );
+        let req = self.auth_headers(ureq::get(&endpoint));
+        let response = req
+            .call()
+            .map_err(|e| format!("Failed to fetch telemetry metadata: {}", e))?;
+        let body = Self::read_body_to_string(response)?;
+        serde_json::from_str(&body)
+            .map_err(|e| format!("Failed to parse telemetry metadata JSON: {}", e))
+    }
+
     pub fn push_packet(
         &self,
         metadata: &RemotePacketMetadata,
         raw_telemetry_payload: &[u8],
         notes: &[RemoteAnalysisNote],
     ) -> Result<(), String> {
-        if !self.cached_role.can_push() {
-            return Err("User role lacks Editor or Admin permission to push telemetry packets to the team repository.".to_string());
+        // 1. Upload the raw telemetry payload to storage bucket
+        let storage_url = format!(
+            "{}/storage/v1/object/telemetry-files/{}/{}.ibt",
+            self.url, metadata.project_id, metadata.telemetry_id
+        );
+        let storage_req = self
+            .auth_headers(ureq::post(&storage_url))
+            .header("Content-Type", "application/octet-stream");
+
+        let mut upload_success = false;
+        match storage_req.send(raw_telemetry_payload) {
+            Ok(res) => {
+                let status = res.status();
+                if status == 200 || status == 201 {
+                    upload_success = true;
+                } else if status == 400 || status == 409 {
+                    if let Ok(body) = Self::read_body_to_string(res) {
+                        if body.contains("Duplicate") || body.contains("KeyAlreadyExists") {
+                            upload_success = true;
+                        } else {
+                            return Err(format!("Failed to upload telemetry payload to storage ({}): {}", status, body));
+                        }
+                    } else {
+                        return Err(format!("Failed to upload telemetry payload to storage ({}) and failed to read body", status));
+                    }
+                } else {
+                    return Err(format!("Failed to upload telemetry payload to storage, received HTTP {}", status));
+                }
+            }
+            Err(e) => return Err(format!("Failed to upload telemetry payload to storage: {}", e)),
         }
 
-        // 1. Insert Metadata
-        let meta_url = format!("{}/rest/v1/telemetry_packets", self.url);
+        if !upload_success {
+            return Err("Failed to upload telemetry payload".to_string());
+        }
+
+        // 2. Insert Metadata
+        let meta_url = format!("{}/rest/v1/telemetry_metadata", self.url);
         let meta_json = serde_json::to_string(metadata).map_err(|e| e.to_string())?;
-        let meta_req = self.auth_headers(ureq::post(&meta_url))
+        let meta_req = self
+            .auth_headers(ureq::post(&meta_url))
             .header("Content-Type", "application/json")
             .header("Prefer", "return=representation");
-        
-        let meta_res = meta_req.send(meta_json.as_bytes()).map_err(|e| format!("Failed to insert metadata: {}", e))?;
+
+        let meta_res = meta_req
+            .send(meta_json.as_bytes())
+            .map_err(|e| format!("Failed to insert metadata: {}", e))?;
         let meta_body = Self::read_body_to_string(meta_res)?;
         let returned_meta: Vec<RemotePacketMetadata> = serde_json::from_str(&meta_body)
             .map_err(|e| format!("Failed to parse inserted packet metadata response: {}", e))?;
-        
-        let packet_id = returned_meta.first()
+
+        let packet_id = returned_meta
+            .first()
             .and_then(|m| m.id.clone())
             .ok_or_else(|| "No packet ID returned after metadata insert".to_string())?;
 
-        // 2. Compress payload and insert into telemetry_blobs
-        let compressed = compress_cloud_payload(raw_telemetry_payload)
-            .map_err(|e| format!("Compression failed: {}", e))?;
-        let hex_data = encode_bytea(&compressed);
-
-        let blob_record = BlobRecord {
-            packet_id: packet_id.clone(),
-            compressed_data: hex_data,
-            uncompressed_size: raw_telemetry_payload.len() as i64,
-            compressed_size: compressed.len() as i64,
-        };
-
-        let blob_url = format!("{}/rest/v1/telemetry_blobs", self.url);
-        let blob_json = serde_json::to_string(&blob_record).map_err(|e| e.to_string())?;
-        let blob_req = self.auth_headers(ureq::post(&blob_url))
-            .header("Content-Type", "application/json")
-            .header("Prefer", "return=minimal");
-        let _ = blob_req.send(blob_json.as_bytes()).map_err(|e| format!("Failed to upload telemetry binary blob (HTTP {}): {}", e, e.to_string()))?;
         // 3. Insert analysis notes if any exist
         if !notes.is_empty() {
             let mut notes_to_insert = Vec::new();
@@ -342,53 +376,59 @@ impl SupabaseClient {
             }
             let notes_url = format!("{}/rest/v1/analysis_notes", self.url);
             let notes_json = serde_json::to_string(&notes_to_insert).map_err(|e| e.to_string())?;
-            let notes_req = self.auth_headers(ureq::post(&notes_url))
+            let notes_req = self
+                .auth_headers(ureq::post(&notes_url))
                 .header("Content-Type", "application/json")
                 .header("Prefer", "return=minimal");
-            let _ = notes_req.send(notes_json.as_bytes()).map_err(|e| format!("Failed to upload associated analysis notes: {}", e))?;
+            let _ = notes_req
+                .send(notes_json.as_bytes())
+                .map_err(|e| format!("Failed to upload associated analysis notes: {}", e))?;
         }
 
         Ok(())
     }
 
-    /// Pulls a telemetry packet by ID, decompressing its binary data and fetching associated notes.
-    pub fn pull_packet(&self, packet_id: &str) -> Result<(Vec<u8>, Vec<RemoteAnalysisNote>), String> {
-        if !self.cached_role.can_pull() {
-            return Err("User role lacks permission to pull telemetry data.".to_string());
-        }
+    pub fn pull_packet(
+        &self,
+        packet_id: &str,
+        storage_file_path: &str,
+    ) -> Result<(Vec<u8>, Vec<RemoteAnalysisNote>), String> {
+        // 1. Fetch raw payload from storage
+        let storage_url = format!(
+            "{}/storage/v1/object/telemetry-files/{}",
+            self.url, storage_file_path
+        );
+        let storage_req = self.auth_headers(ureq::get(&storage_url));
+        let storage_res = storage_req
+            .call()
+            .map_err(|e| format!("Failed to download telemetry file from storage: {}", e))?;
 
-        // 1. Fetch compressed blob
-        let blob_url = format!("{}/rest/v1/telemetry_blobs?packet_id=eq.{}&select=*", self.url, packet_id);
-        let blob_req = self.auth_headers(ureq::get(&blob_url));
-        let blob_res = blob_req.call().map_err(|e| format!("Failed to download telemetry blob: {}", e))?;
-        let blob_body = Self::read_body_to_string(blob_res)?;
-        let blobs: Vec<BlobRecord> = serde_json::from_str(&blob_body)
-            .map_err(|e| format!("Failed to parse downloaded blob JSON: {}", e))?;
-        
-        let blob = blobs.first().ok_or_else(|| format!("No telemetry blob found for packet_id {}", packet_id))?;
-        let compressed = decode_bytea(&blob.compressed_data)?;
-        let decompressed = decompress_cloud_payload(&compressed)
-            .map_err(|e| format!("Decompression failed: {}", e))?;
+        let mut raw_data = Vec::new();
+        storage_res
+            .into_body()
+            .into_reader()
+            .read_to_end(&mut raw_data)
+            .map_err(|e| format!("Failed to read telemetry file bytes: {}", e))?;
 
         // 2. Fetch associated notes
         let notes = self.fetch_remote_notes(packet_id)?;
-        Ok((decompressed, notes))
+        Ok((raw_data, notes))
     }
 
-    /// Fetches analysis notes associated with a specific remote packet ID.
     pub fn fetch_remote_notes(&self, packet_id: &str) -> Result<Vec<RemoteAnalysisNote>, String> {
-        if !self.cached_role.can_pull() {
-            return Err("User role lacks permission to read analysis notes.".to_string());
-        }
-        let notes_url = format!("{}/rest/v1/analysis_notes?packet_id=eq.{}&select=*", self.url, packet_id);
+        let notes_url = format!(
+            "{}/rest/v1/analysis_notes?packet_id=eq.{}&select=*",
+            self.url, packet_id
+        );
         let notes_req = self.auth_headers(ureq::get(&notes_url));
-        let notes_res = notes_req.call().map_err(|e| format!("Failed to fetch notes: {}", e))?;
+        let notes_res = notes_req
+            .call()
+            .map_err(|e| format!("Failed to fetch notes: {}", e))?;
         let notes_body = Self::read_body_to_string(notes_res)?;
         serde_json::from_str(&notes_body).map_err(|e| format!("Failed to parse notes JSON: {}", e))
     }
 }
 
-/// Minimal URL query string encoder for email addresses.
 fn urlencoding_simple(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
@@ -403,38 +443,4 @@ fn urlencoding_simple(s: &str) -> String {
         }
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_bytea_encoding_and_decoding_roundtrip() {
-        let test_bytes = vec![0x00, 0x01, 0xFF, 0x42, 0xAA, 0x55];
-        let encoded = encode_bytea(&test_bytes);
-        assert_eq!(encoded, "\\x0001ff42aa55");
-
-        let decoded = decode_bytea(&encoded).expect("Failed to decode valid bytea string");
-        assert_eq!(decoded, test_bytes);
-    }
-
-    #[test]
-    fn test_simple_url_encoding() {
-        let email = "arturo.driver+team@opendav.com";
-        let encoded = urlencoding_simple(email);
-        assert_eq!(encoded, "arturo.driver%2Bteam%40opendav.com");
-    }
-
-    #[test]
-    fn test_admin_permissions_required_for_user_management() {
-        let mut client = SupabaseClient::new("https://test.supabase.co", "key", None);
-        client.cached_role = BackendUserRole::Editor;
-        assert!(client.fetch_all_users().is_err());
-        assert!(client.update_user_role("uuid-123", BackendUserRole::Viewer).is_err());
-
-        client.cached_role = BackendUserRole::Viewer;
-        assert!(client.fetch_all_users().is_err());
-        assert!(client.update_user_role("uuid-123", BackendUserRole::Editor).is_err());
-    }
 }

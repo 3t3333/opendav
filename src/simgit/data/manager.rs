@@ -37,6 +37,18 @@ impl SimGitManager {
         self.set_active_project(repository.name())
     }
 
+    pub fn delete_project(&mut self, project_name: &str) -> Result<(), RepositoryError> {
+        let repo_path = self.root_dir.join(project_name);
+        if repo_path.is_dir() {
+            fs::remove_dir_all(&repo_path).map_err(RepositoryError::Io)?;
+        }
+        if self.active_project.as_deref() == Some(project_name) {
+            self.active_project = None;
+            let _ = fs::remove_file(self.root_dir.join(".active_repository"));
+        }
+        Ok(())
+    }
+
     pub fn active_repository(&self) -> Result<SimGitRepository, RepositoryError> {
         let name = self
             .active_project

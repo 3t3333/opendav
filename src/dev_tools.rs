@@ -55,9 +55,12 @@ pub fn draw_overlay(ctx: &egui::Context, metrics: &mut DebugMetrics) {
                 ui.add_space(4.0);
 
                 ui.label(
-                    egui::RichText::new(format!("Graph Render: {:.2} ms", metrics.graph_render_time_ms))
-                        .color(theme.text_primary)
-                        .small(),
+                    egui::RichText::new(format!(
+                        "Graph Render: {:.2} ms",
+                        metrics.graph_render_time_ms
+                    ))
+                    .color(theme.text_primary)
+                    .small(),
                 );
                 ui.label(
                     egui::RichText::new(format!("Points Rendered: {}", metrics.points_rendered))
@@ -69,7 +72,7 @@ pub fn draw_overlay(ctx: &egui::Context, metrics: &mut DebugMetrics) {
                         .color(theme.text_tertiary)
                         .small(),
                 );
-                
+
                 let ratio = if metrics.frame_time_ms > 0.0 {
                     (metrics.points_rendered as f32 / metrics.frame_time_ms).round() as u32
                 } else {
@@ -81,7 +84,7 @@ pub fn draw_overlay(ctx: &egui::Context, metrics: &mut DebugMetrics) {
                         .small()
                         .strong(),
                 );
-                
+
                 ui.add_space(4.0);
                 let avg_dt = if !metrics.history_dt.is_empty() {
                     metrics.history_dt.iter().sum::<f32>() / metrics.history_dt.len() as f32
@@ -90,11 +93,14 @@ pub fn draw_overlay(ctx: &egui::Context, metrics: &mut DebugMetrics) {
                 };
                 let avg_fps = if avg_dt > 0.0 { 1.0 / avg_dt } else { 0.0 };
                 let avg_ft = avg_dt * 1000.0;
-                
+
                 ui.label(
-                    egui::RichText::new(format!("Avg (25f): {:.1} FPS | {:.2} ms", avg_fps, avg_ft))
-                        .color(theme.text_tertiary)
-                        .small(),
+                    egui::RichText::new(format!(
+                        "Avg (25f): {:.1} FPS | {:.2} ms",
+                        avg_fps, avg_ft
+                    ))
+                    .color(theme.text_tertiary)
+                    .small(),
                 );
             });
     }

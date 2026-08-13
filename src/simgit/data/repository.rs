@@ -146,9 +146,7 @@ impl AnalysisContext {
             }
         }
         let cursor = self.cursor_seconds?;
-        cursor
-            .is_finite()
-            .then_some((cursor - 0.25, cursor + 0.25))
+        cursor.is_finite().then_some((cursor - 0.25, cursor + 0.25))
     }
 }
 
@@ -161,10 +159,16 @@ pub fn calculate_section_delta_from_cache(
         return None;
     }
     let start_idx = time_delta_pts
-        .binary_search_by(|p| p[0].partial_cmp(&start_t).unwrap_or(std::cmp::Ordering::Equal))
+        .binary_search_by(|p| {
+            p[0].partial_cmp(&start_t)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .unwrap_or_else(|idx| idx.min(time_delta_pts.len().saturating_sub(1)));
     let end_idx = time_delta_pts
-        .binary_search_by(|p| p[0].partial_cmp(&end_t).unwrap_or(std::cmp::Ordering::Equal))
+        .binary_search_by(|p| {
+            p[0].partial_cmp(&end_t)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .unwrap_or_else(|idx| idx.min(time_delta_pts.len().saturating_sub(1)));
 
     if start_idx >= time_delta_pts.len() || end_idx >= time_delta_pts.len() {
@@ -981,20 +985,21 @@ mod tests {
 
     #[test]
     fn calculate_section_delta_from_cache_computes_difference() {
-        let pts = vec![
-            [10.0, 0.100],
-            [15.0, 0.250],
-            [20.0, 0.400],
-            [25.0, 0.150],
-        ];
+        let pts = vec![[10.0, 0.100], [15.0, 0.250], [20.0, 0.400], [25.0, 0.150]];
         // From 10.0s to 20.0s: delta goes from +0.100 to +0.400 => lost 0.300s
         let section_delta = super::calculate_section_delta_from_cache(&pts, 10.0, 20.0);
         assert!((section_delta.unwrap() - 0.3).abs() < 1e-5);
-        assert_eq!(super::format_section_delta(section_delta.unwrap()), "+0.300s");
+        assert_eq!(
+            super::format_section_delta(section_delta.unwrap()),
+            "+0.300s"
+        );
 
         // From 20.0s to 25.0s: delta goes from +0.400 to +0.150 => gained 0.250s (-0.250s)
         let section_delta_gained = super::calculate_section_delta_from_cache(&pts, 20.0, 25.0);
         assert!((section_delta_gained.unwrap() - (-0.25)).abs() < 1e-5);
-        assert_eq!(super::format_section_delta(section_delta_gained.unwrap()), "-0.250s");
+        assert_eq!(
+            super::format_section_delta(section_delta_gained.unwrap()),
+            "-0.250s"
+        );
     }
 }

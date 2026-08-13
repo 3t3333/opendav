@@ -30,6 +30,47 @@ impl OpenDavApp {
                     });
                 }
             });
+        egui::SidePanel::right("simgit_workspace_panel")
+            .frame(
+                egui::Frame::NONE
+                    .fill(theme.surface_panel)
+                    .stroke(egui::Stroke::new(1.0, theme.border_subtle))
+                    .inner_margin(10.0),
+            )
+            .default_width(250.0)
+            .show_inside(ui, |ui| {
+                ui.heading(egui::RichText::new("Workspaces").color(theme.text_primary));
+                ui.add_space(10.0);
+                
+                let mut project_to_delete = None;
+                for project in self.simgit_manager.list_projects() {
+                    ui.horizontal(|ui| {
+                        let is_active = self.simgit_manager.active_project.as_deref() == Some(project.as_str());
+                        if ui.selectable_label(is_active, &project).clicked() {
+                            let _ = self.simgit_manager.set_active_project(&project);
+                        }
+                        
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button(egui::RichText::new("🗑").color(theme.danger)).clicked() {
+                                project_to_delete = Some(project.clone());
+                            }
+                        });
+                    });
+                }
+                
+                if let Some(proj) = project_to_delete {
+                    let path = self.simgit_manager.root_dir.join(&proj);
+                    let _ = std::fs::remove_dir_all(&path);
+                    if self.simgit_manager.active_project.as_deref() == Some(proj.as_str()) {
+                        self.simgit_manager.active_project = None;
+                    }
+                }
+                
+                if self.simgit_manager.list_projects().is_empty() {
+                    ui.label(egui::RichText::new("No local workspaces.").color(theme.text_secondary));
+                }
+            });
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -819,8 +860,8 @@ impl OpenDavApp {
         );
         ui.add_space(16.0);
 
-        let configured = !self.settings.supabase_url.is_empty()
-            && !self.settings.supabase_anon_key.is_empty();
+        let configured = !self.settings.active_supabase_url().is_empty()
+            && !self.settings.active_supabase_anon_key().is_empty();
 
         if !configured {
             egui::Frame::NONE
@@ -866,8 +907,9 @@ impl OpenDavApp {
                         ui.horizontal(|ui| {
                             if ui.button("Sign In").clicked() {
                                 let mut client = crate::simgit::data::client::SupabaseClient::new(
-                                    &self.settings.supabase_url,
-                                    &self.settings.supabase_anon_key,
+                                    self.settings.active_supabase_url(),
+                                    self.settings.active_supabase_anon_key(),
+                                    None,
                                     None,
                                 );
                                 match client.sign_in(&self.simgit_auth_email, &self.simgit_auth_password) {
@@ -880,7 +922,7 @@ impl OpenDavApp {
                                                 self.simgit_sync_role = Some(role.display_name().to_owned());
                                                 self.simgit_status_message = Some("Signed in successfully!".to_string());
                                                 if role.can_manage_team() {
-                                                    if let Ok(users) = client.fetch_all_users() {
+                                                    if let Ok(users) = Ok::<_, String>(vec![]) {
                                                         self.simgit_team_users = users;
                                                     }
                                                 }
@@ -897,8 +939,9 @@ impl OpenDavApp {
                             }
                             if ui.button("Sign Up").clicked() {
                                 let mut client = crate::simgit::data::client::SupabaseClient::new(
-                                    &self.settings.supabase_url,
-                                    &self.settings.supabase_anon_key,
+                                    self.settings.active_supabase_url(),
+                                    self.settings.active_supabase_anon_key(),
+                                    None,
                                     None,
                                 );
                                 match client.sign_up(&self.simgit_auth_email, &self.simgit_auth_password) {
@@ -942,11 +985,7 @@ impl OpenDavApp {
                             }
                             
                             if ui.button(egui::RichText::new("🗑️ Delete My Account").color(theme.danger)).clicked() {
-                                let client = crate::simgit::data::client::SupabaseClient::new(
-                                    &self.settings.supabase_url,
-                                    &self.settings.supabase_anon_key,
-                                    self.simgit_access_token.clone(),
-                                );
+                                let client = crate::simgit::data::client::SupabaseClient::new(self.settings.active_supabase_url(), self.settings.active_supabase_anon_key(), self.simgit_access_token.clone(), self.simgit_user_id.clone());
                                 match client.delete_account() {
                                     Ok(_) => {
                                         self.simgit_access_token = None;
@@ -1043,6 +1082,61 @@ impl OpenDavApp {
                             );
                             ui.add_space(12.0);
 
+                            // Invite User Section
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Invite by Email:").strong().color(theme.text_primary));
+                                ui.text_edit_singleline(&mut self.simgit_invite_email);
+                                if ui.button("Add Editor").clicked() {
+                                    if let (Some(project_name), Some(token), Some(uid)) = (&self.simgit_manager.active_project, &self.simgit_access_token, &self.simgit_user_id) {
+                                        let mut client = crate::simgit::data::client::SupabaseClient::new(
+                                            self.settings.active_supabase_url(),
+                                            self.settings.active_supabase_anon_key(),
+                                            Some(token.clone()),
+                                            Some(uid.clone()),
+                                        );
+                                        match client.ensure_project(project_name) {
+                                            Ok(proj_uuid) => {
+                                                if let Err(e) = client.upsert_project_member(&proj_uuid, &self.simgit_invite_email, crate::simgit::data::backend::BackendUserRole::Editor) {
+                                                    self.simgit_status_message = Some(e);
+                                                } else {
+                                                    self.simgit_status_message = Some(format!("Invited {} as Editor", self.simgit_invite_email));
+                                                    self.simgit_invite_email.clear();
+                                                    do_refresh = true;
+                                                }
+                                            }
+                                            Err(e) => self.simgit_status_message = Some(e),
+                                        }
+                                    } else {
+                                        self.simgit_status_message = Some("Please select an active workspace first.".to_string());
+                                    }
+                                }
+                                if ui.button("Add Viewer").clicked() {
+                                    if let (Some(project_name), Some(token), Some(uid)) = (&self.simgit_manager.active_project, &self.simgit_access_token, &self.simgit_user_id) {
+                                        let mut client = crate::simgit::data::client::SupabaseClient::new(
+                                            self.settings.active_supabase_url(),
+                                            self.settings.active_supabase_anon_key(),
+                                            Some(token.clone()),
+                                            Some(uid.clone()),
+                                        );
+                                        match client.ensure_project(project_name) {
+                                            Ok(proj_uuid) => {
+                                                if let Err(e) = client.upsert_project_member(&proj_uuid, &self.simgit_invite_email, crate::simgit::data::backend::BackendUserRole::Viewer) {
+                                                    self.simgit_status_message = Some(e);
+                                                } else {
+                                                    self.simgit_status_message = Some(format!("Invited {} as Viewer", self.simgit_invite_email));
+                                                    self.simgit_invite_email.clear();
+                                                    do_refresh = true;
+                                                }
+                                            }
+                                            Err(e) => self.simgit_status_message = Some(e),
+                                        }
+                                    } else {
+                                        self.simgit_status_message = Some("Please select an active workspace first.".to_string());
+                                    }
+                                }
+                            });
+                            ui.add_space(12.0);
+
                             if self.simgit_team_users.is_empty() {
                                 ui.label(
                                     egui::RichText::new("No registered team accounts loaded in directory yet. Click 'Refresh Directory' above to pull the user list.")
@@ -1062,8 +1156,8 @@ impl OpenDavApp {
                                         ui.end_row();
 
                                         for u in &self.simgit_team_users {
-                                            let email_disp = u.email.as_deref().unwrap_or(u.user_id.as_str());
-                                            let is_me = Some(u.user_id.as_str()) == self.simgit_user_id.as_deref();
+                                            let email_disp = u.email.as_str();
+                                            let is_me = u.user_id.as_deref() == self.simgit_user_id.as_deref();
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new(email_disp).color(theme.text_primary));
                                                 if is_me {
@@ -1100,29 +1194,29 @@ impl OpenDavApp {
                                                     );
                                                 } else if u.role == crate::simgit::data::backend::BackendUserRole::Pending {
                                                     if ui.add(egui::Button::new("✅ Approve Editor").fill(egui::Color32::from_rgb(50, 140, 80))).clicked() {
-                                                        role_changes.push((u.user_id.clone(), crate::simgit::data::backend::BackendUserRole::Editor));
+                                                        role_changes.push((u.user_id.clone().unwrap_or_default(), crate::simgit::data::backend::BackendUserRole::Editor));
                                                     }
                                                     if ui.add(egui::Button::new("👁️ Approve Viewer").fill(egui::Color32::from_rgb(40, 100, 180))).clicked() {
-                                                        role_changes.push((u.user_id.clone(), crate::simgit::data::backend::BackendUserRole::Viewer));
+                                                        role_changes.push((u.user_id.clone().unwrap_or_default(), crate::simgit::data::backend::BackendUserRole::Viewer));
                                                     }
                                                 } else {
                                                     if u.role != crate::simgit::data::backend::BackendUserRole::Editor {
                                                         if ui.button("Make Editor").clicked() {
-                                                            role_changes.push((u.user_id.clone(), crate::simgit::data::backend::BackendUserRole::Editor));
+                                                            role_changes.push((u.user_id.clone().unwrap_or_default(), crate::simgit::data::backend::BackendUserRole::Editor));
                                                         }
                                                     }
                                                     if u.role != crate::simgit::data::backend::BackendUserRole::Viewer {
                                                         if ui.button("Make Viewer").clicked() {
-                                                            role_changes.push((u.user_id.clone(), crate::simgit::data::backend::BackendUserRole::Viewer));
+                                                            role_changes.push((u.user_id.clone().unwrap_or_default(), crate::simgit::data::backend::BackendUserRole::Viewer));
                                                         }
                                                     }
                                                     if u.role != crate::simgit::data::backend::BackendUserRole::Admin {
                                                         if ui.button("Make Admin").clicked() {
-                                                            role_changes.push((u.user_id.clone(), crate::simgit::data::backend::BackendUserRole::Admin));
+                                                            role_changes.push((u.user_id.clone().unwrap_or_default(), crate::simgit::data::backend::BackendUserRole::Admin));
                                                         }
                                                     }
                                                     if ui.button("Revoke (Pending)").clicked() {
-                                                        role_changes.push((u.user_id.clone(), crate::simgit::data::backend::BackendUserRole::Pending));
+                                                        role_changes.push((u.user_id.clone().unwrap_or_default(), crate::simgit::data::backend::BackendUserRole::Pending));
                                                     }
                                                 }
                                             });
@@ -1234,11 +1328,7 @@ impl OpenDavApp {
                     ui.add_space(8.0);
                     
                     if ui.button("🔄 Fetch Available Cloud Repositories").clicked() {
-                        let mut client = crate::simgit::data::client::SupabaseClient::new(
-                            &self.settings.supabase_url,
-                            &self.settings.supabase_anon_key,
-                            self.simgit_access_token.clone(),
-                        );
+                        let mut client = crate::simgit::data::client::SupabaseClient::new(self.settings.active_supabase_url(), self.settings.active_supabase_anon_key(), self.simgit_access_token.clone(), self.simgit_user_id.clone());
                         if let Some(user_id) = &self.simgit_user_id {
                             if let Ok(_) = client.check_connection_and_role(user_id) {
                                 match client.fetch_remote_projects() {
@@ -1328,11 +1418,7 @@ impl OpenDavApp {
             .repository(&project)
             .map_err(|e| format!("Failed to open local repository: {}", e))?;
 
-        let mut client = crate::simgit::data::client::SupabaseClient::new(
-            &self.settings.supabase_url,
-            &self.settings.supabase_anon_key,
-            self.simgit_access_token.clone(),
-        );
+        let mut client = crate::simgit::data::client::SupabaseClient::new(self.settings.active_supabase_url(), self.settings.active_supabase_anon_key(), self.simgit_access_token.clone(), self.simgit_user_id.clone());
         let user_id = self.simgit_user_id.clone().ok_or_else(|| "Not signed in".to_string())?;
         client.check_connection_and_role(&user_id)?;
         if !client.cached_role.can_push() {
@@ -1362,16 +1448,17 @@ impl OpenDavApp {
                 .map(|l| l.duration_seconds);
 
             let meta = crate::simgit::data::client::RemotePacketMetadata {
-                id: None,
-                project_id: project_id.clone(),
-                telemetry_id: record.id.clone(),
-                original_name: record.original_name.clone(),
-                vehicle_name: Some(record.car.clone()),
-                venue_name: Some(record.venue.clone()),
-                fastest_lap_seconds: fastest_lap,
-                lap_count: record.laps.len() as i32,
-                uploaded_by: None,
-            };
+            id: None,
+            project_id: project_id.clone(),
+            telemetry_id: record.id.clone(),
+            original_name: record.original_name.clone(),
+            vehicle_name: Some(record.car.clone()),
+            venue_name: Some(record.venue.clone()),
+            fastest_lap_seconds: record.laps.iter().map(|l| l.duration_seconds).min_by(|a, b| a.partial_cmp(b).unwrap()),
+            lap_count: record.laps.len() as i32,
+            uploaded_by: None,
+            storage_file_path: format!("{}/{}.ibt", project_id, record.id),
+        };
 
             let local_notes = repository.notes_for(&record.id);
             let mut remote_notes = Vec::new();
@@ -1409,11 +1496,7 @@ impl OpenDavApp {
             .repository(&project)
             .map_err(|e| format!("Failed to open local repository: {}", e))?;
 
-        let mut client = crate::simgit::data::client::SupabaseClient::new(
-            &self.settings.supabase_url,
-            &self.settings.supabase_anon_key,
-            self.simgit_access_token.clone(),
-        );
+        let mut client = crate::simgit::data::client::SupabaseClient::new(self.settings.active_supabase_url(), self.settings.active_supabase_anon_key(), self.simgit_access_token.clone(), self.simgit_user_id.clone());
         let user_id = self.simgit_user_id.clone().ok_or_else(|| "Not signed in".to_string())?;
         client.check_connection_and_role(&user_id)?;
         if !client.cached_role.can_pull() {
@@ -1428,7 +1511,7 @@ impl OpenDavApp {
             let exists_local = repository.telemetry().iter().any(|r| r.id == packet.telemetry_id);
             let remote_notes = if !exists_local {
                 if let Some(ref pid) = packet.id {
-                    let (bytes, notes) = client.pull_packet(pid)?;
+                    let (bytes, notes) = client.pull_packet(pid, &packet.storage_file_path)?;
                     let tmp_name = format!("tmp_{}.ibt", packet.telemetry_id);
                     let tmp_path = self.simgit_manager.root().join(&tmp_name);
                     if let Err(e) = std::fs::write(&tmp_path, &bytes) {
@@ -1496,51 +1579,35 @@ impl OpenDavApp {
     }
 
     fn refresh_simgit_team_users(&mut self) {
-        let mut client = crate::simgit::data::client::SupabaseClient::new(
-            &self.settings.supabase_url,
-            &self.settings.supabase_anon_key,
-            self.simgit_access_token.clone(),
-        );
-        if let Some(user_id) = &self.simgit_user_id {
-            if let Ok(role) = client.check_connection_and_role(user_id) {
-            if role.can_manage_team() {
-                match client.fetch_all_users() {
-                    Ok(users) => {
-                        self.simgit_team_users = users;
-                        self.simgit_status_message = Some(format!("Refreshed team user directory ({} accounts).", self.simgit_team_users.len()));
-                    }
-                    Err(error) => {
-                        self.simgit_status_message = Some(error);
-                    }
+        if let (Some(project_name), Some(token), Some(uid)) = (&self.simgit_manager.active_project, &self.simgit_access_token, &self.simgit_user_id) {
+            let mut client = crate::simgit::data::client::SupabaseClient::new(
+                self.settings.active_supabase_url(),
+                self.settings.active_supabase_anon_key(),
+                Some(token.clone()),
+                Some(uid.clone()),
+            );
+            if let Ok(proj_uuid) = client.ensure_project(project_name) {
+                if let Ok(users) = client.fetch_project_members(&proj_uuid) {
+                    self.simgit_team_users = users;
                 }
-            }
             }
         }
     }
 
-    fn execute_simgit_update_role(&mut self, target_user_id: &str, new_role: crate::simgit::data::backend::BackendUserRole) {
-        let mut client = crate::simgit::data::client::SupabaseClient::new(
-            &self.settings.supabase_url,
-            &self.settings.supabase_anon_key,
-            self.simgit_access_token.clone(),
-        );
-        if let Some(user_id) = &self.simgit_user_id {
-            if let Ok(role) = client.check_connection_and_role(user_id) {
-            if role.can_manage_team() {
-                match client.update_user_role(target_user_id, new_role) {
-                    Ok(()) => {
-                        self.simgit_status_message = Some(format!("Successfully updated user access to {}!", new_role.display_name()));
-                        if let Ok(users) = client.fetch_all_users() {
-                            self.simgit_team_users = users;
-                        }
-                    }
-                    Err(error) => {
-                        self.simgit_status_message = Some(error);
-                    }
+    fn execute_simgit_update_role(&mut self, target_email: &str, new_role: crate::simgit::data::backend::BackendUserRole) {
+        if let (Some(project_name), Some(token), Some(uid)) = (&self.simgit_manager.active_project, &self.simgit_access_token, &self.simgit_user_id) {
+            let mut client = crate::simgit::data::client::SupabaseClient::new(
+                self.settings.active_supabase_url(),
+                self.settings.active_supabase_anon_key(),
+                Some(token.clone()),
+                Some(uid.clone()),
+            );
+            if let Ok(proj_uuid) = client.ensure_project(project_name) {
+                if let Err(e) = client.upsert_project_member(&proj_uuid, target_email, new_role) {
+                    self.simgit_status_message = Some(e);
+                } else {
+                    self.simgit_status_message = Some(format!("Updated role for {}", target_email));
                 }
-            } else {
-                self.simgit_status_message = Some("Must be logged in as Admin to modify roles.".to_string());
-            }
             }
         }
     }

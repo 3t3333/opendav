@@ -16,18 +16,28 @@ pub struct SetupDiff {
 impl SetupDiff {
     pub fn compare(previous: &SetupData, new: &SetupData) -> Self {
         let mut changes = Vec::new();
-        
-        let all_keys: std::collections::HashSet<_> = previous.parameters.keys()
+
+        let all_keys: std::collections::HashSet<_> = previous
+            .parameters
+            .keys()
             .chain(new.parameters.keys())
             .collect();
-            
+
         let mut sorted_keys: Vec<_> = all_keys.into_iter().collect();
         sorted_keys.sort();
 
         for key in sorted_keys {
-            let prev_val = previous.parameters.get(key).cloned().unwrap_or_else(|| "N/A".to_string());
-            let new_val = new.parameters.get(key).cloned().unwrap_or_else(|| "N/A".to_string());
-            
+            let prev_val = previous
+                .parameters
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| "N/A".to_string());
+            let new_val = new
+                .parameters
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| "N/A".to_string());
+
             if prev_val != new_val {
                 let numeric_delta = Self::calculate_numeric_delta(&prev_val, &new_val);
                 changes.push(ParameterDiff {
@@ -38,14 +48,20 @@ impl SetupDiff {
                 });
             }
         }
-        
+
         Self { changes }
     }
 
     fn calculate_numeric_delta(prev: &str, new: &str) -> Option<f64> {
-        let prev_num = prev.split_whitespace().next().and_then(|s| s.parse::<f64>().ok());
-        let new_num = new.split_whitespace().next().and_then(|s| s.parse::<f64>().ok());
-        
+        let prev_num = prev
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<f64>().ok());
+        let new_num = new
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<f64>().ok());
+
         match (prev_num, new_num) {
             (Some(p), Some(n)) => Some(n - p),
             _ => None,
@@ -65,7 +81,11 @@ impl SetupDiff {
             let k = change.key.as_str();
             if k.contains("Wing") || k.contains("Aero") {
                 has_aero = true;
-            } else if k.contains("RideHeight") || k.contains("Spring") || k.contains("Camber") || k.contains("Arb") {
+            } else if k.contains("RideHeight")
+                || k.contains("Spring")
+                || k.contains("Camber")
+                || k.contains("Arb")
+            {
                 has_susp = true;
             } else {
                 has_chassis = true;
@@ -73,9 +93,15 @@ impl SetupDiff {
         }
 
         let mut tags = Vec::new();
-        if has_susp { tags.push("Suspension"); }
-        if has_aero { tags.push("Aero"); }
-        if has_chassis { tags.push("Chassis"); }
+        if has_susp {
+            tags.push("Suspension");
+        }
+        if has_aero {
+            tags.push("Aero");
+        }
+        if has_chassis {
+            tags.push("Chassis");
+        }
 
         format!("<< {} Changes", tags.join(" & "))
     }

@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncProvider {
+    #[default]
+    OpenDavCloud,
+    BringYourOwnDatabase,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppSettings {
     pub dark_mode: bool,
@@ -13,6 +21,8 @@ pub struct AppSettings {
     pub mapbox_api_key: String,
     #[serde(default)]
     pub recent_files: Vec<String>,
+    #[serde(default)]
+    pub sync_provider: SyncProvider,
     #[serde(default)]
     pub supabase_url: String,
     #[serde(default)]
@@ -29,6 +39,7 @@ impl Default for AppSettings {
             graph_grid_opacity: default_graph_grid_opacity(),
             mapbox_api_key: String::new(),
             recent_files: Vec::new(),
+            sync_provider: SyncProvider::default(),
             supabase_url: String::new(),
             supabase_anon_key: String::new(),
         }
@@ -40,6 +51,20 @@ const fn default_graph_grid_opacity() -> f32 {
 }
 
 impl AppSettings {
+    pub fn active_supabase_url(&self) -> &str {
+        match self.sync_provider {
+            SyncProvider::OpenDavCloud => "https://ivfbexcwijjaswgbyvnx.supabase.co",
+            SyncProvider::BringYourOwnDatabase => &self.supabase_url,
+        }
+    }
+
+    pub fn active_supabase_anon_key(&self) -> &str {
+        match self.sync_provider {
+            SyncProvider::OpenDavCloud => "sb_publishable_pfxJ_QoovEZ9Ke3v6gQS7w_-EvlUWjj",
+            SyncProvider::BringYourOwnDatabase => &self.supabase_anon_key,
+        }
+    }
+
     pub fn add_recent_file(&mut self, file: String) {
         self.recent_files.retain(|f| f != &file);
         self.recent_files.insert(0, file);
@@ -47,6 +72,7 @@ impl AppSettings {
             self.recent_files.truncate(5);
         }
     }
+
     pub fn load() -> Self {
         if let Ok(data) = std::fs::read_to_string("opendav_config.json") {
             if let Ok(settings) = serde_json::from_str(&data) {

@@ -64,7 +64,7 @@ pub struct LoadedSession {
     pub repository_record: Option<crate::simgit::repository::RepositoryRecordRef>,
     pub session: crate::data::ibt_parser::IbtSession,
     pub track_bounds: Option<(f64, f64, f64, f64)>,
-    
+
     // Caching compiled, scaled PlotPoints for 300+ FPS zero-allocation rendering!
     pub front_raw_pts_cache: Vec<[f64; 2]>,
     pub rear_raw_pts_cache: Vec<[f64; 2]>,
@@ -98,7 +98,7 @@ pub struct LoadedSession {
 
     // Precomputed Lap start timestamps (relative to stint start in seconds) for dotted red line dividers
     pub lap_markers: Vec<f64>,
-    
+
     // Sector reports caches
     pub sectors: Vec<TrackSector>,
     pub sector_bests: Vec<f64>,
@@ -162,9 +162,9 @@ pub struct OpenDavApp {
     pub sector_deltas: Vec<Option<f64>>,
     pub comparison_cyan: Option<crate::signals::comparison::ComparisonCache>,
     pub comparison_secondary: Option<crate::signals::comparison::ComparisonCache>,
-    
+
     pub show_all_splits: bool,
-    
+
     // Track Map Customization
     pub auto_follow_track_map: bool,
     pub auto_rotate_track_map: bool,
@@ -178,13 +178,13 @@ pub struct OpenDavApp {
     pub magnify_line_deltas: bool,
     pub magnifier_multiplier: f64,
     pub hidden_splits: std::collections::HashSet<String>,
-    
+
     // Timing Graphs & Sidebar state
     pub filter_large_sectors: bool,
     pub is_details_sidebar_open: bool,
     pub active_sidebar_tab: Option<GraphsSidebarTab>,
     pub channel_search_query: String,
-    
+
     pub is_playing: bool,
     pub playback_speed: f64,
 
@@ -209,14 +209,15 @@ pub struct OpenDavApp {
     pub show_simgit_analysis_builder: bool,
     pub simgit_analysis_draft: SimGitAnalysisDraft,
     pub simgit_sync_role: Option<String>,
-    pub simgit_team_users: Vec<crate::simgit::data::backend::UserRoleRecord>,
+    pub simgit_team_users: Vec<crate::simgit::data::backend::ProjectMemberRecord>,
+    pub simgit_invite_email: String,
     pub simgit_auth_email: String,
     pub simgit_auth_password: String,
     pub simgit_access_token: Option<String>,
     pub simgit_user_id: Option<String>,
-    
+
     pub simgit_remote_projects: Option<Vec<crate::simgit::data::client::RemoteProject>>,
-    
+
     pub settings: crate::config::settings::AppSettings,
     pub steering_wheel_cache: crate::simgit::ui::input_gauges::SteeringWheelSvgCache,
 
@@ -228,7 +229,7 @@ impl Default for OpenDavApp {
     fn default() -> Self {
         Self {
             app_state: AppState::Splash { progress: 0.0 },
-            active_page: ActivePage::OpenDav,
+            active_page: ActivePage::Graphs,
             active_worksheet: WorksheetTab::Driver,
             active_reports_tab: ReportsTab::SectorAnalysis,
             session_loaded: false,
@@ -296,6 +297,7 @@ impl Default for OpenDavApp {
             simgit_analysis_draft: SimGitAnalysisDraft::default(),
             simgit_sync_role: None,
             simgit_team_users: Vec::new(),
+            simgit_invite_email: String::new(),
             simgit_auth_email: String::new(),
             simgit_auth_password: String::new(),
             simgit_access_token: None,
@@ -303,7 +305,7 @@ impl Default for OpenDavApp {
             simgit_remote_projects: None,
             settings: crate::config::settings::AppSettings::default(),
             steering_wheel_cache: crate::simgit::ui::input_gauges::SteeringWheelSvgCache::default(),
-            
+
             #[cfg(feature = "dev_tools")]
             dev_metrics: crate::dev_tools::DebugMetrics::default(),
         }
@@ -338,11 +340,11 @@ impl OpenDavApp {
             settings: crate::config::settings::AppSettings::load(),
             ..Self::default()
         };
-        
+
         let mut style = egui::Style::default();
         crate::config::theme::AppTheme::for_mode(app.settings.dark_mode).apply(&mut style);
         _cc.egui_ctx.set_global_style(style);
-        
+
         app
     }
 }
@@ -355,23 +357,23 @@ impl LoadedSession {
         mapbox_api_key: &str,
     ) -> Result<Self, String> {
         let n = session.distance.len();
-            
-            // Build base points
-            let mut front_raw = Vec::with_capacity(n);
-            let mut rear_raw = Vec::with_capacity(n);
-            let mut front = Vec::with_capacity(n);
-            let mut rear = Vec::with_capacity(n);
-            let mut rake = Vec::with_capacity(n);
-            let mut speed = Vec::with_capacity(n);
-            let mut throttle = Vec::with_capacity(n);
-            let mut brake = Vec::with_capacity(n);
-            let mut steering = Vec::with_capacity(n);
-            let mut rpm = Vec::with_capacity(n);
-            let mut gear = Vec::with_capacity(n);
-            let mut clutch = Vec::with_capacity(n);
-            let mut latg = Vec::with_capacity(n);
-            let mut longg = Vec::with_capacity(n);
-            let mut cache_to_df_index = Vec::with_capacity(n);
+
+        // Build base points
+        let mut front_raw = Vec::with_capacity(n);
+        let mut rear_raw = Vec::with_capacity(n);
+        let mut front = Vec::with_capacity(n);
+        let mut rear = Vec::with_capacity(n);
+        let mut rake = Vec::with_capacity(n);
+        let mut speed = Vec::with_capacity(n);
+        let mut throttle = Vec::with_capacity(n);
+        let mut brake = Vec::with_capacity(n);
+        let mut steering = Vec::with_capacity(n);
+        let mut rpm = Vec::with_capacity(n);
+        let mut gear = Vec::with_capacity(n);
+        let mut clutch = Vec::with_capacity(n);
+        let mut latg = Vec::with_capacity(n);
+        let mut longg = Vec::with_capacity(n);
+        let mut cache_to_df_index = Vec::with_capacity(n);
 
         let time_col_opt = session
             .dataframe
@@ -381,10 +383,10 @@ impl LoadedSession {
         if time_col_opt.is_none() {
             return Err("SessionTime missing".into());
         }
-            let time_col = time_col_opt.unwrap();
-            let session_start = time_col.get(0).unwrap_or(0.0);
+        let time_col = time_col_opt.unwrap();
+        let session_start = time_col.get(0).unwrap_or(0.0);
 
-            // Fetch columns safely with fallback defaults to prevent schema panics!
+        // Fetch columns safely with fallback defaults to prevent schema panics!
         let speed_col = session
             .dataframe
             .column("Speed")
@@ -453,8 +455,8 @@ impl LoadedSession {
             .map(|c| c.f64().ok())
             .flatten();
 
-            // 1. Compile entire session relative seconds [0.0 to stint duration]
-            for i in 0..n {
+        // 1. Compile entire session relative seconds [0.0 to stint duration]
+        for i in 0..n {
             let is_on_track = is_on_track_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(1.0))
@@ -464,178 +466,178 @@ impl LoadedSession {
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0);
 
-                if is_on_track < 1.0 || in_pit_stall > 0.0 {
-                    continue; // Skip off-track or pit stall samples cleanly!
-                }
-                
-                cache_to_df_index.push(i);
+            if is_on_track < 1.0 || in_pit_stall > 0.0 {
+                continue; // Skip off-track or pit stall samples cleanly!
+            }
 
-                let s_time = time_col.get(i).unwrap_or(0.0);
-                let rel_time = s_time - session_start;
-                
-                front_raw.push([rel_time, session.front_raw[i]]);
-                rear_raw.push([rel_time, session.rear_raw[i]]);
-                front.push([rel_time, session.front_smooth[i]]);
-                rear.push([rel_time, session.rear_smooth[i]]);
-                rake.push([rel_time, session.rake[i]]);
-                
+            cache_to_df_index.push(i);
+
+            let s_time = time_col.get(i).unwrap_or(0.0);
+            let rel_time = s_time - session_start;
+
+            front_raw.push([rel_time, session.front_raw[i]]);
+            rear_raw.push([rel_time, session.rear_raw[i]]);
+            front.push([rel_time, session.front_smooth[i]]);
+            rear.push([rel_time, session.rear_smooth[i]]);
+            rake.push([rel_time, session.rake[i]]);
+
             let raw_speed = speed_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 * 3.6; // convert m/s to km/h
-                speed.push([rel_time, raw_speed]);
+            speed.push([rel_time, raw_speed]);
 
             let raw_thr = throttle_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 * 100.0; // convert 0..1 to 0..100%
-                throttle.push([rel_time, raw_thr]);
+            throttle.push([rel_time, raw_thr]);
 
             let raw_brk = brake_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 * 100.0; // convert 0..1 to 0..100%
-                brake.push([rel_time, raw_brk]);
+            brake.push([rel_time, raw_brk]);
 
             let raw_steer = steering_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 * 57.2958; // convert rad to deg
-                steering.push([rel_time, raw_steer]);
+            steering.push([rel_time, raw_steer]);
 
             let raw_rpm = rpm_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0);
-                rpm.push([rel_time, raw_rpm]);
+            rpm.push([rel_time, raw_rpm]);
 
             let raw_gear = gear_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0);
-                gear.push([rel_time, raw_gear]);
+            gear.push([rel_time, raw_gear]);
             let raw_clutch = clutch_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 * 100.0;
-                clutch.push([rel_time, raw_clutch]);
-                
+            clutch.push([rel_time, raw_clutch]);
+
             let raw_latg = latg_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 / 9.80665; // convert m/s2 to G
-                latg.push([rel_time, raw_latg]);
-                
+            latg.push([rel_time, raw_latg]);
+
             let raw_longg = longg_col
                 .as_ref()
                 .map(|c| c.get(i).unwrap_or(0.0))
                 .unwrap_or(0.0)
                 / 9.80665; // convert m/s2 to G
-                longg.push([rel_time, raw_longg]);
-            }
+            longg.push([rel_time, raw_longg]);
+        }
 
-            // 2. Precompute mathematical dynamic scaling factors across the whole stint to map into stacked Lanes:
-            // Lane 1: Ground Speed : [76.0, 98.0]
-            // Lane 2: RPM          : [52.0, 72.0]
-            // Lane 3: Throttle/Brake: [28.0, 48.0]
-            // Lane 4: Steering     : [10.0, 24.0]
+        // 2. Precompute mathematical dynamic scaling factors across the whole stint to map into stacked Lanes:
+        // Lane 1: Ground Speed : [76.0, 98.0]
+        // Lane 2: RPM          : [52.0, 72.0]
+        // Lane 3: Throttle/Brake: [28.0, 48.0]
+        // Lane 4: Steering     : [10.0, 24.0]
 
-            // Lane 1: Speed Scaling
-            let min_spd = speed.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_spd = speed.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let pad_spd = (max_spd - min_spd) * 0.1;
-            let scale_speed = |val: f64| -> f64 {
+        // Lane 1: Speed Scaling
+        let min_spd = speed.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_spd = speed.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let pad_spd = (max_spd - min_spd) * 0.1;
+        let scale_speed = |val: f64| -> f64 {
             if max_spd == min_spd {
                 return 87.0;
             }
             let pct = ((val - (min_spd - pad_spd)) / ((max_spd + pad_spd) - (min_spd - pad_spd)))
                 .clamp(0.0, 1.0);
-                76.0 + pct * (98.0 - 76.0)
-            };
+            76.0 + pct * (98.0 - 76.0)
+        };
 
-            // Lane 2: RPM Scaling
-            let min_r = rpm.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_r = rpm.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let pad_r = (max_r - min_r) * 0.1;
-            let scale_gear = |val: f64| -> f64 {
-                52.0 + (val.clamp(-1.0, 8.0) + 1.0) * 2.0 // Map -1..8 to 52..70
-            };
-            let scale_clutch = |val: f64| -> f64 {
-                28.0 + (val / 100.0) * 20.0 // Map 0..100 to 28..48
-            };
-            let scale_rpm = |val: f64| -> f64 {
+        // Lane 2: RPM Scaling
+        let min_r = rpm.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_r = rpm.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let pad_r = (max_r - min_r) * 0.1;
+        let scale_gear = |val: f64| -> f64 {
+            52.0 + (val.clamp(-1.0, 8.0) + 1.0) * 2.0 // Map -1..8 to 52..70
+        };
+        let scale_clutch = |val: f64| -> f64 {
+            28.0 + (val / 100.0) * 20.0 // Map 0..100 to 28..48
+        };
+        let scale_rpm = |val: f64| -> f64 {
             if max_r == min_r {
                 return 62.0;
             }
             let pct =
                 ((val - (min_r - pad_r)) / ((max_r + pad_r) - (min_r - pad_r))).clamp(0.0, 1.0);
-                52.0 + pct * (72.0 - 52.0)
-            };
+            52.0 + pct * (72.0 - 52.0)
+        };
 
-            // Lane 3: Throttle and Brake percentage Scaling (Directly fits [28.0, 48.0])
+        // Lane 3: Throttle and Brake percentage Scaling (Directly fits [28.0, 48.0])
         let scale_pct = |val: f64| -> f64 { 28.0 + (val / 100.0).clamp(0.0, 1.0) * (48.0 - 28.0) };
 
-            // Lane 4: Steering Angle Scaling
-            let min_st = steering.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_st = steering.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let pad_st = (max_st - min_st) * 0.1;
-            let scale_steering = |val: f64| -> f64 {
+        // Lane 4: Steering Angle Scaling
+        let min_st = steering.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_st = steering.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let pad_st = (max_st - min_st) * 0.1;
+        let scale_steering = |val: f64| -> f64 {
             if max_st == min_st {
                 return 17.0;
             }
             let pct = ((val - (min_st - pad_st)) / ((max_st + pad_st) - (min_st - pad_st)))
                 .clamp(0.0, 1.0);
-                10.0 + pct * (24.0 - 10.0)
-            };
+            10.0 + pct * (24.0 - 10.0)
+        };
 
-            // Master Scaling for Dynamic Ride Heights (middle lane in Vehicle worksheet: 45.0 to 75.0)
-            let min_f_raw = front_raw.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_f_raw = front_raw.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let min_f_sm = front.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_f_sm = front.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            
-            let min_front = f64::min(min_f_raw, min_f_sm);
-            let max_front = f64::max(max_f_raw, max_f_sm);
-            let pad_front = (max_front - min_front) * 0.02;
+        // Master Scaling for Dynamic Ride Heights (middle lane in Vehicle worksheet: 45.0 to 75.0)
+        let min_f_raw = front_raw.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_f_raw = front_raw.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let min_f_sm = front.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_f_sm = front.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
 
-            let scale_front = |val: f64| -> f64 {
-                let range = (max_front + pad_front) - (min_front - pad_front);
+        let min_front = f64::min(min_f_raw, min_f_sm);
+        let max_front = f64::max(max_f_raw, max_f_sm);
+        let pad_front = (max_front - min_front) * 0.02;
+
+        let scale_front = |val: f64| -> f64 {
+            let range = (max_front + pad_front) - (min_front - pad_front);
             if range <= 1e-6 {
                 return 60.0;
             }
-                let pct = ((val - (min_front - pad_front)) / range).clamp(0.0, 1.0);
-                45.5 + pct * 29.0
-            };
+            let pct = ((val - (min_front - pad_front)) / range).clamp(0.0, 1.0);
+            45.5 + pct * 29.0
+        };
 
-            let min_r_raw = rear_raw.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_r_raw = rear_raw.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let min_r_sm = rear.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_r_sm = rear.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            
-            let min_rear = f64::min(min_r_raw, min_r_sm);
-            let max_rear = f64::max(max_r_raw, max_r_sm);
-            let pad_rear = (max_rear - min_rear) * 0.02;
+        let min_r_raw = rear_raw.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_r_raw = rear_raw.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let min_r_sm = rear.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_r_sm = rear.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
 
-            let scale_rear = |val: f64| -> f64 {
-                let range = (max_rear + pad_rear) - (min_rear - pad_rear);
+        let min_rear = f64::min(min_r_raw, min_r_sm);
+        let max_rear = f64::max(max_r_raw, max_r_sm);
+        let pad_rear = (max_rear - min_rear) * 0.02;
+
+        let scale_rear = |val: f64| -> f64 {
+            let range = (max_rear + pad_rear) - (min_rear - pad_rear);
             if range <= 1e-6 {
                 return 60.0;
             }
-                let pct = ((val - (min_rear - pad_rear)) / range).clamp(0.0, 1.0);
-                45.5 + pct * 29.0
-            };
+            let pct = ((val - (min_rear - pad_rear)) / range).clamp(0.0, 1.0);
+            45.5 + pct * 29.0
+        };
 
-            let min_rake_val = rake.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_rake_val = rake.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let pad_rk = (max_rake_val - min_rake_val) * 0.1;
+        let min_rake_val = rake.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_rake_val = rake.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let pad_rk = (max_rake_val - min_rake_val) * 0.1;
 
-            let scale_rake = |val: f64| -> f64 {
+        let scale_rake = |val: f64| -> f64 {
             if max_rake_val == min_rake_val {
                 return 60.0;
             }
@@ -643,144 +645,144 @@ impl LoadedSession {
                 / ((max_rake_val + pad_rk) - (min_rake_val - pad_rk)))
                 .clamp(0.0, 1.0);
             45.5 + pct * 29.0
-            };
+        };
 
-            let min_latg = latg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_latg = latg.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let min_longg = longg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
-            let max_longg = longg.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
-            let min_g = f64::min(min_latg, min_longg);
-            let max_g = f64::max(max_latg, max_longg);
-            let pad_g = (max_g - min_g) * 0.1;
-            
-            let scale_g = |val: f64| -> f64 {
+        let min_latg = latg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_latg = latg.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let min_longg = longg.iter().map(|p| p[1]).fold(f64::MAX, f64::min);
+        let max_longg = longg.iter().map(|p| p[1]).fold(f64::MIN, f64::max);
+        let min_g = f64::min(min_latg, min_longg);
+        let max_g = f64::max(max_latg, max_longg);
+        let pad_g = (max_g - min_g) * 0.1;
+
+        let scale_g = |val: f64| -> f64 {
             if max_g == min_g {
                 return 25.0;
             }
             let pct =
                 ((val - (min_g - pad_g)) / ((max_g + pad_g) - (min_g - pad_g))).clamp(0.0, 1.0);
-                10.0 + pct * (40.0 - 10.0)
-            };
+            10.0 + pct * (40.0 - 10.0)
+        };
 
-            let throttle_raw = throttle.clone();
-            let brake_raw = brake.clone();
-            let steering_raw = steering.clone();
+        let throttle_raw = throttle.clone();
+        let brake_raw = brake.clone();
+        let steering_raw = steering.clone();
 
-            // Scale and store normalized curves directly in place inside cache!
-            let cached_len = front.len();
-            for i in 0..cached_len {
-                front_raw[i][1] = scale_front(front_raw[i][1]);
-                front[i][1] = scale_front(front[i][1]);
-                
-                rear_raw[i][1] = scale_rear(rear_raw[i][1]);
-                rear[i][1] = scale_rear(rear[i][1]);
-                rake[i][1] = scale_rake(rake[i][1]);
-                
-                speed[i][1] = scale_speed(speed[i][1]);
-                throttle[i][1] = scale_pct(throttle[i][1]);
-                brake[i][1] = scale_pct(brake[i][1]);
-                steering[i][1] = scale_steering(steering[i][1]);
-                rpm[i][1] = scale_rpm(rpm[i][1]);
-                gear[i][1] = scale_gear(gear[i][1]);
-                clutch[i][1] = scale_clutch(clutch[i][1]);
-                latg[i][1] = scale_g(latg[i][1]);
-                longg[i][1] = scale_g(longg[i][1]);
-            }
+        // Scale and store normalized curves directly in place inside cache!
+        let cached_len = front.len();
+        for i in 0..cached_len {
+            front_raw[i][1] = scale_front(front_raw[i][1]);
+            front[i][1] = scale_front(front[i][1]);
 
-            // 3. Precompute Lap Start/End Boundaries based on actual parsed lap numbers
-            let mut markers = Vec::new();
-            let mut ranges = Vec::new();
+            rear_raw[i][1] = scale_rear(rear_raw[i][1]);
+            rear[i][1] = scale_rear(rear[i][1]);
+            rake[i][1] = scale_rake(rake[i][1]);
 
-            let df = &session.dataframe;
-            let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
-            let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
+            speed[i][1] = scale_speed(speed[i][1]);
+            throttle[i][1] = scale_pct(throttle[i][1]);
+            brake[i][1] = scale_pct(brake[i][1]);
+            steering[i][1] = scale_steering(steering[i][1]);
+            rpm[i][1] = scale_rpm(rpm[i][1]);
+            gear[i][1] = scale_gear(gear[i][1]);
+            clutch[i][1] = scale_clutch(clutch[i][1]);
+            latg[i][1] = scale_g(latg[i][1]);
+            longg[i][1] = scale_g(longg[i][1]);
+        }
+
+        // 3. Precompute Lap Start/End Boundaries based on actual parsed lap numbers
+        let mut markers = Vec::new();
+        let mut ranges = Vec::new();
+
+        let df = &session.dataframe;
+        let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
+        let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
         if lap_col_opt.is_none() || time_col_opt.is_none() {
             return Err("Lap/Time missing".into());
         }
-            let lap_col = lap_col_opt.unwrap();
-            let time_col = time_col_opt.unwrap();
-            let session_start = time_col.get(0).unwrap_or(0.0);
+        let lap_col = lap_col_opt.unwrap();
+        let time_col = time_col_opt.unwrap();
+        let session_start = time_col.get(0).unwrap_or(0.0);
 
-            for &(lap_num, _duration) in &session.lap_times {
-                let mut start_idx = None;
-                let mut end_idx = None;
-                for i in 0..n {
-                    if lap_col.get(i).unwrap_or(0.0) as i32 == lap_num {
-                        if start_idx.is_none() {
-                            start_idx = Some(i);
-                        }
-                        end_idx = Some(i);
+        for &(lap_num, _duration) in &session.lap_times {
+            let mut start_idx = None;
+            let mut end_idx = None;
+            for i in 0..n {
+                if lap_col.get(i).unwrap_or(0.0) as i32 == lap_num {
+                    if start_idx.is_none() {
+                        start_idx = Some(i);
                     }
-                }
-                if let (Some(s_idx), Some(e_idx)) = (start_idx, end_idx) {
-                    let start_t = time_col.get(s_idx).unwrap_or(0.0) - session_start;
-                    let end_t = time_col.get(e_idx).unwrap_or(0.0) - session_start;
-                    ranges.push((lap_num, start_t, end_t));
-                    markers.push(start_t);
+                    end_idx = Some(i);
                 }
             }
-
-            if ranges.is_empty() && !front.is_empty() {
-                let end_stint = front.last().unwrap()[0];
-                ranges.push((1, 0.0, end_stint));
-                markers.push(0.0);
+            if let (Some(s_idx), Some(e_idx)) = (start_idx, end_idx) {
+                let start_t = time_col.get(s_idx).unwrap_or(0.0) - session_start;
+                let end_t = time_col.get(e_idx).unwrap_or(0.0) - session_start;
+                ranges.push((lap_num, start_t, end_t));
+                markers.push(start_t);
             }
+        }
 
-            // Harmonize and write the physical transition lap list back to the session struct to maintain absolute app coherence!
-            let mut sync_laps = Vec::new();
-            for &(lap_num, start_t, end_t) in &ranges {
-                let duration = end_t - start_t;
-                if duration > 1.0 {
-                    sync_laps.push((lap_num, duration));
-                }
+        if ranges.is_empty() && !front.is_empty() {
+            let end_stint = front.last().unwrap()[0];
+            ranges.push((1, 0.0, end_stint));
+            markers.push(0.0);
+        }
+
+        // Harmonize and write the physical transition lap list back to the session struct to maintain absolute app coherence!
+        let mut sync_laps = Vec::new();
+        for &(lap_num, start_t, end_t) in &ranges {
+            let duration = end_t - start_t;
+            if duration > 1.0 {
+                sync_laps.push((lap_num, duration));
             }
-            session.lap_times = sync_laps;
+        }
+        session.lap_times = sync_laps;
 
-            // Rebuild lap data cache
-            let mut data_cache = Vec::new();
-            let mut unique_laps = Vec::new();
-            for &(lap_num, _, _) in &ranges {
-                unique_laps.push(lap_num);
-            }
+        // Rebuild lap data cache
+        let mut data_cache = Vec::new();
+        let mut unique_laps = Vec::new();
+        for &(lap_num, _, _) in &ranges {
+            unique_laps.push(lap_num);
+        }
 
-            let df = &session.dataframe;
-            let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
+        let df = &session.dataframe;
+        let lap_col_opt = df.column("Lap").ok().and_then(|c| c.f64().ok());
         let dist_col_opt = df
             .column("Distance_Derived")
             .ok()
             .and_then(|c| c.f64().ok());
-            let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
+        let time_col_opt = df.column("SessionTime").ok().and_then(|c| c.f64().ok());
         if lap_col_opt.is_none() || dist_col_opt.is_none() || time_col_opt.is_none() {
             return Err("Lap/Dist/Time missing".into());
         }
-            let lap_col = lap_col_opt.unwrap();
-            let dist_col = dist_col_opt.unwrap();
-            let time_col = time_col_opt.unwrap();
-            let lat_col = df.column("Lat").ok().and_then(|c| c.f64().ok());
-            let lon_col = df.column("Lon").ok().and_then(|c| c.f64().ok());
+        let lap_col = lap_col_opt.unwrap();
+        let dist_col = dist_col_opt.unwrap();
+        let time_col = time_col_opt.unwrap();
+        let lat_col = df.column("Lat").ok().and_then(|c| c.f64().ok());
+        let lon_col = df.column("Lon").ok().and_then(|c| c.f64().ok());
 
-            let mut lat0 = 0.0;
-            let mut lon0 = 0.0;
-            let mut wm0 = [0.0, 0.0];
-            if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
-                lat0 = la.get(0).unwrap_or(0.0);
-                lon0 = lo.get(0).unwrap_or(0.0);
-                let (wx, wy) = crate::signals::mapbox::wgs84_to_web_mercator(lon0, lat0);
-                wm0 = [wx, wy];
-            }
+        let mut lat0 = 0.0;
+        let mut lon0 = 0.0;
+        let mut wm0 = [0.0, 0.0];
+        if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
+            lat0 = la.get(0).unwrap_or(0.0);
+            lon0 = lo.get(0).unwrap_or(0.0);
+            let (wx, wy) = crate::signals::mapbox::wgs84_to_web_mercator(lon0, lat0);
+            wm0 = [wx, wy];
+        }
 
-            // Removed r_earth, lat0_rad, and lon0_rad since we now use wgs84_to_web_mercator
-            
-            let mut min_lat = f64::MAX;
-            let mut max_lat = f64::MIN;
-            let mut min_lon = f64::MAX;
-            let mut max_lon = f64::MIN;
-            
-            if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
-                for i in 0..n {
-                    let lat_val = la.get(i).unwrap_or(0.0);
-                    let lon_val = lo.get(i).unwrap_or(0.0);
-                    if lat_val != 0.0 && lon_val != 0.0 {
+        // Removed r_earth, lat0_rad, and lon0_rad since we now use wgs84_to_web_mercator
+
+        let mut min_lat = f64::MAX;
+        let mut max_lat = f64::MIN;
+        let mut min_lon = f64::MAX;
+        let mut max_lon = f64::MIN;
+
+        if let (Some(la), Some(lo)) = (lat_col.as_ref(), lon_col.as_ref()) {
+            for i in 0..n {
+                let lat_val = la.get(i).unwrap_or(0.0);
+                let lon_val = lo.get(i).unwrap_or(0.0);
+                if lat_val != 0.0 && lon_val != 0.0 {
                     if lat_val < min_lat {
                         min_lat = lat_val;
                     }
@@ -793,150 +795,150 @@ impl LoadedSession {
                     if lon_val > max_lon {
                         max_lon = lon_val;
                     }
-                    }
+                }
+            }
+        }
+
+        for &l_num in &unique_laps {
+            let mut dists = Vec::new();
+            let mut times = Vec::new();
+            let mut xs = Vec::new();
+            let mut ys = Vec::new();
+            for i in 0..n {
+                if lap_col.get(i).unwrap_or(0.0) as i32 == l_num {
+                    dists.push(dist_col.get(i).unwrap_or(0.0));
+                    times.push(time_col.get(i).unwrap_or(0.0));
+
+                    let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+                    let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+
+                    // Use exact Web Mercator projection so the trace perfectly matches the satellite map!
+                    let (wm_x, wm_y) = crate::signals::mapbox::wgs84_to_web_mercator(lon, lat);
+                    let x = wm_x - wm0[0];
+                    let y = wm_y - wm0[1];
+                    xs.push(x);
+                    ys.push(y);
                 }
             }
 
-            for &l_num in &unique_laps {
-                let mut dists = Vec::new();
-                let mut times = Vec::new();
-                let mut xs = Vec::new();
-                let mut ys = Vec::new();
+            // Fallback: if the lap was found in the headers but has no matching samples
+            // (e.g. short test files, out-laps, or glitching Lap channels), we populate it with ALL samples
+            // to prevent rendering panics from empty arrays!
+            if dists.is_empty() {
                 for i in 0..n {
-                    if lap_col.get(i).unwrap_or(0.0) as i32 == l_num {
-                        dists.push(dist_col.get(i).unwrap_or(0.0));
-                        times.push(time_col.get(i).unwrap_or(0.0));
-                        
-                        let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
-                        let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
-                        
-                        // Use exact Web Mercator projection so the trace perfectly matches the satellite map!
-                        let (wm_x, wm_y) = crate::signals::mapbox::wgs84_to_web_mercator(lon, lat);
-                        let x = wm_x - wm0[0];
-                        let y = wm_y - wm0[1];
-                        xs.push(x);
-                        ys.push(y);
-                    }
-                }
+                    dists.push(dist_col.get(i).unwrap_or(0.0));
+                    times.push(time_col.get(i).unwrap_or(0.0));
+                    let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
+                    let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
 
-                // Fallback: if the lap was found in the headers but has no matching samples 
-                // (e.g. short test files, out-laps, or glitching Lap channels), we populate it with ALL samples
-                // to prevent rendering panics from empty arrays!
-                if dists.is_empty() {
-                    for i in 0..n {
-                        dists.push(dist_col.get(i).unwrap_or(0.0));
-                        times.push(time_col.get(i).unwrap_or(0.0));
-                        let lat = lat_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
-                        let lon = lon_col.as_ref().and_then(|c| c.get(i)).unwrap_or(0.0);
-                        
-                        // Use exact Web Mercator projection so the trace perfectly matches the satellite map!
-                        let (wm_x, wm_y) = crate::signals::mapbox::wgs84_to_web_mercator(lon, lat);
-                        let x = wm_x - wm0[0];
-                        let y = wm_y - wm0[1];
-                        xs.push(x);
-                        ys.push(y);
-                    }
+                    // Use exact Web Mercator projection so the trace perfectly matches the satellite map!
+                    let (wm_x, wm_y) = crate::signals::mapbox::wgs84_to_web_mercator(lon, lat);
+                    let x = wm_x - wm0[0];
+                    let y = wm_y - wm0[1];
+                    xs.push(x);
+                    ys.push(y);
                 }
+            }
 
-                if !dists.is_empty() {
-                    let base_dist = dists[0];
-                    let base_time = times[0];
+            if !dists.is_empty() {
+                let base_dist = dists[0];
+                let base_time = times[0];
                 for d in &mut dists {
                     *d -= base_dist;
                 }
                 for t in &mut times {
                     *t -= base_time;
                 }
-                    data_cache.push(LapData {
-                        lap_num: l_num,
-                        dist: dists,
-                        time: times,
-                        x: xs,
-                        y: ys,
-                    });
-                }
+                data_cache.push(LapData {
+                    lap_num: l_num,
+                    dist: dists,
+                    time: times,
+                    x: xs,
+                    y: ys,
+                });
             }
-            // removed self.lap_data_cache
-
-            // Rebuild track sectors and sector bests cache using Signals Layer
-            let sectors_cache = detect_track_sectors(&session, corner_merge_threshold);
-            
-            let mut bests = vec![f64::MAX; sectors_cache.len()];
-            for (s_idx, sector) in sectors_cache.iter().enumerate() {
-                for lap in &data_cache {
-                    if lap.lap_num > 3 {
-                        let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
-                        let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
-                        let s_time = t_end - t_start;
-                        if s_time > 0.0 && s_time < bests[s_idx] {
-                            bests[s_idx] = s_time;
-                        }
-                    }
-                }
-                if bests[s_idx] == f64::MAX {
-                    for lap in &data_cache {
-                        let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
-                        let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
-                        let s_time = t_end - t_start;
-                        if s_time > 0.0 && s_time < bests[s_idx] {
-                            bests[s_idx] = s_time;
-                        }
-                    }
-                }
-            }
-
-            let mut track_bounds = None;
-            if min_lat != f64::MAX {
-                track_bounds = Some((min_lon, min_lat, max_lon, max_lat));
-            }
-
-            let worksheet_channel_pts_cache =
-                crate::signals::worksheet_channels::build_worksheet_channel_caches(
-                    &session,
-                    &speed,
-                    &cache_to_df_index,
-                );
-
-            Ok(LoadedSession {
-                track_bounds,
-                bg_image_bytes: None,
-                bg_bounds: None,
-                bg_texture: None,
-                fg_image_bytes: None,
-                fg_bounds: None,
-                fg_texture: None,
-                map_origin: Some(wm0),
-                file_name,
-                repository_record: None,
-                session,
-                front_raw_pts_cache: front_raw,
-                rear_raw_pts_cache: rear_raw,
-                front_pts_cache: front,
-                rear_pts_cache: rear,
-                rake_pts_cache: rake,
-                speed_pts_cache: speed,
-                lat_g_pts_cache: latg,
-                long_g_pts_cache: longg,
-                throttle_pts_cache: throttle,
-                throttle_raw_pts_cache: throttle_raw,
-                brake_pts_cache: brake,
-                brake_raw_pts_cache: brake_raw,
-                steering_pts_cache: steering,
-                steering_raw_pts_cache: steering_raw,
-                rpm_pts_cache: rpm,
-                clutch_pts_cache: clutch,
-                distance_delta_pts_cache: vec![],
-                time_delta_pts_cache: vec![],
-                worksheet_channel_pts_cache,
-                gear_pts_cache: gear,
-                lap_ranges: ranges,
-                lap_markers: markers,
-                cache_to_df_index,
-                sectors: sectors_cache,
-                sector_bests: bests,
-                lap_data_cache: data_cache,
-            })
         }
+        // removed self.lap_data_cache
+
+        // Rebuild track sectors and sector bests cache using Signals Layer
+        let sectors_cache = detect_track_sectors(&session, corner_merge_threshold);
+
+        let mut bests = vec![f64::MAX; sectors_cache.len()];
+        for (s_idx, sector) in sectors_cache.iter().enumerate() {
+            for lap in &data_cache {
+                if lap.lap_num > 3 {
+                    let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
+                    let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
+                    let s_time = t_end - t_start;
+                    if s_time > 0.0 && s_time < bests[s_idx] {
+                        bests[s_idx] = s_time;
+                    }
+                }
+            }
+            if bests[s_idx] == f64::MAX {
+                for lap in &data_cache {
+                    let t_start = get_lap_time_at_distance(&lap.dist, &lap.time, sector.start_dist);
+                    let t_end = get_lap_time_at_distance(&lap.dist, &lap.time, sector.end_dist);
+                    let s_time = t_end - t_start;
+                    if s_time > 0.0 && s_time < bests[s_idx] {
+                        bests[s_idx] = s_time;
+                    }
+                }
+            }
+        }
+
+        let mut track_bounds = None;
+        if min_lat != f64::MAX {
+            track_bounds = Some((min_lon, min_lat, max_lon, max_lat));
+        }
+
+        let worksheet_channel_pts_cache =
+            crate::signals::worksheet_channels::build_worksheet_channel_caches(
+                &session,
+                &speed,
+                &cache_to_df_index,
+            );
+
+        Ok(LoadedSession {
+            track_bounds,
+            bg_image_bytes: None,
+            bg_bounds: None,
+            bg_texture: None,
+            fg_image_bytes: None,
+            fg_bounds: None,
+            fg_texture: None,
+            map_origin: Some(wm0),
+            file_name,
+            repository_record: None,
+            session,
+            front_raw_pts_cache: front_raw,
+            rear_raw_pts_cache: rear_raw,
+            front_pts_cache: front,
+            rear_pts_cache: rear,
+            rake_pts_cache: rake,
+            speed_pts_cache: speed,
+            lat_g_pts_cache: latg,
+            long_g_pts_cache: longg,
+            throttle_pts_cache: throttle,
+            throttle_raw_pts_cache: throttle_raw,
+            brake_pts_cache: brake,
+            brake_raw_pts_cache: brake_raw,
+            steering_pts_cache: steering,
+            steering_raw_pts_cache: steering_raw,
+            rpm_pts_cache: rpm,
+            clutch_pts_cache: clutch,
+            distance_delta_pts_cache: vec![],
+            time_delta_pts_cache: vec![],
+            worksheet_channel_pts_cache,
+            gear_pts_cache: gear,
+            lap_ranges: ranges,
+            lap_markers: markers,
+            cache_to_df_index,
+            sectors: sectors_cache,
+            sector_bests: bests,
+            lap_data_cache: data_cache,
+        })
+    }
     pub fn get_cache_slice(&self, name: &str) -> &[[f64; 2]] {
         match name {
             "Speed" => &self.speed_pts_cache,
@@ -961,7 +963,7 @@ impl LoadedSession {
 
     pub fn recalculate_sectors(&mut self, threshold: f64) {
         self.sectors = detect_track_sectors(&self.session, threshold);
-        
+
         let mut bests = vec![f64::MAX; self.sectors.len()];
         for (s_idx, sector) in self.sectors.iter().enumerate() {
             for lap in &self.lap_data_cache {
@@ -984,25 +986,25 @@ impl OpenDavApp {
         if self.sessions.is_empty() {
             return;
         }
-        
+
         let ref_lap_opt = self.ref_lap_cyan.or(self.ref_lap_white);
         if ref_lap_opt.is_none() {
             return;
         }
         let (ref_sess_idx, ref_lap_num) = ref_lap_opt.unwrap();
         let p_idx = self.primary_session_idx;
-        
+
         if ref_sess_idx >= self.sessions.len() || p_idx >= self.sessions.len() {
             return;
         }
-        
+
         let mut dist_delta = Vec::new();
         let mut time_delta = Vec::new();
-        
+
         {
             let p_session = &self.sessions[p_idx];
             let r_session = &self.sessions[ref_sess_idx];
-            
+
             let r_lap = r_session
                 .lap_data_cache
                 .iter()
@@ -1011,14 +1013,14 @@ impl OpenDavApp {
                 return;
             }
             let r_lap = r_lap.unwrap();
-            
+
             // For each point in primary cache, we find its lap, then find its distance into lap
             let mut current_lap_idx = 0;
-            
+
             for i in 0..p_session.speed_pts_cache.len() {
                 let p_t = p_session.speed_pts_cache[i][0]; // rel_time
                 let df_idx = p_session.cache_to_df_index[i];
-                
+
                 let mut found_lap_num = None;
                 let mut lap_start_t = 0.0;
                 for &(l_num, st, et) in &p_session.lap_ranges {
@@ -1028,7 +1030,7 @@ impl OpenDavApp {
                         break;
                     }
                 }
-                
+
                 if let Some(l_num) = found_lap_num {
                     if let Some(p_lap) =
                         p_session.lap_data_cache.iter().find(|l| l.lap_num == l_num)
@@ -1040,23 +1042,23 @@ impl OpenDavApp {
                             .unwrap_or_else(|x| x)
                             .min(p_lap.time.len().saturating_sub(1));
                         let dist_into_lap = p_lap.dist[p_idx_in_lap];
-                        
+
                         let r_idx_in_lap = r_lap
                             .dist
                             .binary_search_by(|d| d.partial_cmp(&dist_into_lap).unwrap())
                             .unwrap_or_else(|x| x)
                             .min(r_lap.dist.len().saturating_sub(1));
-                        
+
                         let r_time_into_lap = r_lap.time[r_idx_in_lap];
-                        
+
                         let time_diff = p_time_into_lap - r_time_into_lap;
                         time_delta.push([p_t, time_diff]);
-                        
+
                         let p_x = p_lap.x[p_idx_in_lap];
                         let p_y = p_lap.y[p_idx_in_lap];
                         let r_x = r_lap.x[r_idx_in_lap];
                         let r_y = r_lap.y[r_idx_in_lap];
-                        
+
                         let dist_diff = ((p_x - r_x).powi(2) + (p_y - r_y).powi(2)).sqrt();
                         dist_delta.push([p_t, dist_diff]);
                     } else {
@@ -1069,7 +1071,7 @@ impl OpenDavApp {
                 }
             }
         }
-        
+
         let p_session = &mut self.sessions[p_idx];
         p_session.distance_delta_pts_cache = dist_delta;
         p_session.time_delta_pts_cache = time_delta;
@@ -1090,8 +1092,8 @@ impl OpenDavApp {
             .map(|(_, lap)| lap)
             .unwrap_or_else(|| {
                 crate::signals::processing::get_fastest_lap(&self.sessions[p_idx].session.lap_times)
-        });
-        
+            });
+
         let build = |reference: Option<(usize, i32)>| {
             let (reference_session, reference_lap) = reference?;
             let selection = crate::signals::comparison::ComparisonSelection {
@@ -1135,7 +1137,7 @@ impl eframe::App for OpenDavApp {
                 .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ibt"))
                 .collect()
         });
-        
+
         for path in dropped_ibt_files {
             self.load_telemetry_file(&path);
         }
@@ -1148,7 +1150,7 @@ impl eframe::App for OpenDavApp {
             if self.dev_metrics.history_dt.len() > 25 {
                 self.dev_metrics.history_dt.remove(0);
             }
-            
+
             if ctx.input(|i| i.key_pressed(egui::Key::F10)) {
                 self.dev_metrics.show_overlay = !self.dev_metrics.show_overlay;
             }
@@ -1198,38 +1200,38 @@ impl eframe::App for OpenDavApp {
                 // Calculate smooth delta-time interpolation (if playback is active)
                 if self.is_playing {
                     let dt = ctx.input(|i| i.stable_dt) as f64;
-                    
+
                     if let Some((s_idx, lap_num)) = self.selected_lap {
                         if s_idx < self.sessions.len() {
                             let loaded = &self.sessions[s_idx];
                             if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == lap_num)
                             {
                                 let (_, start_t, end_t) = loaded.lap_ranges[pos];
-                                
+
                                 let mut loop_start = start_t;
                                 let mut loop_end = end_t;
-                                
+
                                 if let Some((min_x, max_x)) = self.visible_x_range {
                                     loop_start = f64::max(start_t, min_x);
                                     loop_end = f64::min(end_t, max_x);
                                 }
-                                
+
                                 // Failsafe in case of zero or inverted bounds
                                 if loop_start >= loop_end - 0.001 {
                                     loop_start = start_t;
                                     loop_end = end_t;
                                 }
-                                
+
                                 let mut current_t = self.cursor_x.unwrap_or(loop_start);
                                 current_t += dt * self.playback_speed;
-                                
+
                                 // Seamless looping within the specified data section
                                 if current_t > loop_end {
                                     current_t = loop_start;
                                 } else if current_t < loop_start {
                                     current_t = loop_start;
                                 }
-                                
+
                                 self.cursor_x = Some(current_t);
                                 ctx.request_repaint(); // Crucial for smooth playback
                             } else {
@@ -1297,7 +1299,7 @@ fn main() -> eframe::Result<()> {
     };
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([862.0, 540.0]) 
+        .with_inner_size([862.0, 540.0])
         .with_min_inner_size([800.0, 500.0])
         .with_decorations(false) // Start frameless for splash screen
         .with_title("OpenDav");
@@ -1527,8 +1529,11 @@ impl OpenDavApp {
         self.pending_graphs_track_map_bounds = bounds;
         self.auto_follow_track_map = false;
         self.reset_track_map_bounds_flag = bounds.is_none() && track_map.visible;
-        self.reset_track_map_bounds_next_frame =
-            if self.reset_track_map_bounds_flag { 3 } else { 0 };
+        self.reset_track_map_bounds_next_frame = if self.reset_track_map_bounds_flag {
+            3
+        } else {
+            0
+        };
     }
 
     fn load_simgit_analysis_sources(
@@ -1669,9 +1674,8 @@ impl OpenDavApp {
         self.primary_session_idx = new_idx;
         self.active_file = Some(file_name);
         self.session_loaded = true;
-        let fastest = crate::signals::processing::get_fastest_lap(
-            &self.sessions[new_idx].session.lap_times,
-        );
+        let fastest =
+            crate::signals::processing::get_fastest_lap(&self.sessions[new_idx].session.lap_times);
         self.selected_lap = (fastest > 0).then_some((new_idx, fastest));
         self.cursor_x = None;
         self.update_sector_deltas();
@@ -1680,7 +1684,6 @@ impl OpenDavApp {
         self.reset_bounds_next_frame = 3;
         self.reset_track_map_bounds_flag = true;
         self.reset_track_map_bounds_next_frame = 3;
-        self.active_page = ActivePage::OpenDav;
         Ok(())
     }
 
@@ -1726,7 +1729,7 @@ impl LoadedSession {
                 std::path::Path::new("assets/maps").join(format!("{}_dark.png", track_id));
             let google_path =
                 std::path::Path::new("assets/maps").join(format!("{}_google.png", track_id));
-            
+
             let fetch_result = if mapbox_path.exists() {
                 crate::signals::mapbox::fetch_mapbox_image(
                     mapbox_api_key,
@@ -1765,7 +1768,7 @@ impl LoadedSession {
                     )
                 }
             };
-            
+
             if let Ok((fg_b, fg_bnds, bg_b, bg_bnds)) = fetch_result {
                 self.fg_image_bytes = Some(fg_b);
                 self.fg_bounds = Some(fg_bnds);

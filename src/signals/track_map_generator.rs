@@ -1,19 +1,22 @@
+use crate::data::ibt_parser;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use crate::data::ibt_parser;
 
 fn get_fastest_lap(lap_times: &[(i32, f64)]) -> i32 {
-    let filtered: Vec<&(i32, f64)> = lap_times.iter()
+    let filtered: Vec<&(i32, f64)> = lap_times
+        .iter()
         .filter(|(lap_num, _)| *lap_num > 3)
         .collect();
     if !filtered.is_empty() {
-        filtered.iter()
+        filtered
+            .iter()
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|val| val.0)
             .unwrap_or(0)
     } else {
-        lap_times.iter()
+        lap_times
+            .iter()
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|val| val.0)
             .unwrap_or(0)
@@ -21,7 +24,12 @@ fn get_fastest_lap(lap_times: &[(i32, f64)]) -> i32 {
 }
 
 // Finds the coordinate (x, y) at a target distance on a lap by linear interpolation.
-fn get_lap_coord_at_distance(dist: &[f64], x_coords: &[f64], y_coords: &[f64], target_dist: f64) -> (f64, f64) {
+fn get_lap_coord_at_distance(
+    dist: &[f64],
+    x_coords: &[f64],
+    y_coords: &[f64],
+    target_dist: f64,
+) -> (f64, f64) {
     if dist.is_empty() {
         return (0.0, 0.0);
     }
@@ -31,7 +39,10 @@ fn get_lap_coord_at_distance(dist: &[f64], x_coords: &[f64], y_coords: &[f64], t
     if target_dist >= dist[dist.len() - 1] {
         return (x_coords[x_coords.len() - 1], y_coords[y_coords.len() - 1]);
     }
-    match dist.binary_search_by(|val| val.partial_cmp(&target_dist).unwrap_or(std::cmp::Ordering::Equal)) {
+    match dist.binary_search_by(|val| {
+        val.partial_cmp(&target_dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         Ok(idx) => (x_coords[idx], y_coords[idx]),
         Err(idx) => {
             if idx == 0 {
@@ -58,7 +69,11 @@ pub struct TrackSector {
     pub end_dist: f64,
 }
 
-fn detect_track_sectors(session: &ibt_parser::IbtSession, fastest_lap: i32, merge_threshold: f64) -> Vec<TrackSector> {
+fn detect_track_sectors(
+    session: &ibt_parser::IbtSession,
+    fastest_lap: i32,
+    merge_threshold: f64,
+) -> Vec<TrackSector> {
     let mut sectors = Vec::new();
     if fastest_lap <= 0 {
         return sectors;
@@ -68,7 +83,11 @@ fn detect_track_sectors(session: &ibt_parser::IbtSession, fastest_lap: i32, merg
         Some(col) => col,
         None => return sectors,
     };
-    let dist_col = match df.column("Distance_Derived").ok().and_then(|c| c.f64().ok()) {
+    let dist_col = match df
+        .column("Distance_Derived")
+        .ok()
+        .and_then(|c| c.f64().ok())
+    {
         Some(col) => col,
         None => return sectors,
     };
@@ -76,7 +95,11 @@ fn detect_track_sectors(session: &ibt_parser::IbtSession, fastest_lap: i32, merg
         Some(col) => col,
         None => return sectors,
     };
-    let steer_col = match df.column("SteeringWheelAngle").ok().and_then(|c| c.f64().ok()) {
+    let steer_col = match df
+        .column("SteeringWheelAngle")
+        .ok()
+        .and_then(|c| c.f64().ok())
+    {
         Some(col) => col,
         None => return sectors,
     };
@@ -153,9 +176,21 @@ fn detect_track_sectors(session: &ibt_parser::IbtSession, fastest_lap: i32, merg
     if final_corners.is_empty() {
         let s1 = lap_len / 3.0;
         let s2 = 2.0 * lap_len / 3.0;
-        sectors.push(TrackSector { name: "Sector 1".to_string(), start_dist: 0.0, end_dist: s1 });
-        sectors.push(TrackSector { name: "Sector 2".to_string(), start_dist: s1, end_dist: s2 });
-        sectors.push(TrackSector { name: "Sector 3".to_string(), start_dist: s2, end_dist: lap_len });
+        sectors.push(TrackSector {
+            name: "Sector 1".to_string(),
+            start_dist: 0.0,
+            end_dist: s1,
+        });
+        sectors.push(TrackSector {
+            name: "Sector 2".to_string(),
+            start_dist: s1,
+            end_dist: s2,
+        });
+        sectors.push(TrackSector {
+            name: "Sector 3".to_string(),
+            start_dist: s2,
+            end_dist: lap_len,
+        });
         return sectors;
     }
     let first_corner_start = lap_dist[final_corners[0].0];
@@ -195,7 +230,10 @@ fn detect_track_sectors(session: &ibt_parser::IbtSession, fastest_lap: i32, merg
     sectors
 }
 
-pub fn generate_track_map_json(ibt_path: &Path, dest_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn generate_track_map_json(
+    ibt_path: &Path,
+    dest_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !ibt_path.exists() {
         return Err(format!("Telemetry file not found: {}", ibt_path.display()).into());
     }
@@ -258,7 +296,7 @@ pub fn generate_track_map_json(ibt_path: &Path, dest_path: &Path) -> Result<(), 
     for i in 1..x_coords.len() {
         let dx = x_coords[i] - x_coords[i - 1];
         let dy = y_coords[i] - y_coords[i - 1];
-        let step_dist = (dx*dx + dy*dy).sqrt();
+        let step_dist = (dx * dx + dy * dy).sqrt();
         if step_dist > max_jump {
             if !curr_seg.is_empty() {
                 segments.push(curr_seg);
@@ -274,6 +312,6 @@ pub fn generate_track_map_json(ibt_path: &Path, dest_path: &Path) -> Result<(), 
     let json_data = serde_json::to_string(&segments)?;
     let mut file = File::create(dest_path)?;
     file.write_all(json_data.as_bytes())?;
-    
+
     Ok(())
 }

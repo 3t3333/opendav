@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::Path;
 use image::{GenericImage, RgbaImage};
+use std::fs;
 use std::io::Cursor;
 use std::io::Read;
+use std::path::Path;
 
 fn lon_to_x(lon: f64, zoom: u32) -> f64 {
     (lon + 180.0) / 360.0 * ((1 << zoom) as f64)
@@ -10,7 +10,8 @@ fn lon_to_x(lon: f64, zoom: u32) -> f64 {
 
 fn lat_to_y(lat: f64, zoom: u32) -> f64 {
     let lat_rad = lat.to_radians();
-    (1.0 - ((lat_rad.tan() + 1.0 / lat_rad.cos()).ln()) / std::f64::consts::PI) / 2.0 * ((1 << zoom) as f64)
+    (1.0 - ((lat_rad.tan() + 1.0 / lat_rad.cos()).ln()) / std::f64::consts::PI) / 2.0
+        * ((1 << zoom) as f64)
 }
 
 fn x_to_lon(x: f64, zoom: u32) -> f64 {
@@ -58,7 +59,7 @@ fn fetch_layer(
     let height = wm_max_y - wm_min_y;
     let mut size = f64::max(width, height);
     size *= padding; // dynamically padded
-    
+
     let pad_min_lon = web_mercator_to_wgs84(cx - size / 2.0, cy - size / 2.0).0;
     let pad_min_lat = web_mercator_to_wgs84(cx - size / 2.0, cy - size / 2.0).1;
     let pad_max_lon = web_mercator_to_wgs84(cx + size / 2.0, cy + size / 2.0).0;
@@ -73,7 +74,7 @@ fn fetch_layer(
     loop {
         min_tx = lon_to_x(pad_min_lon, zoom).floor() as u32;
         max_tx = lon_to_x(pad_max_lon, zoom).floor() as u32;
-        min_ty = lat_to_y(pad_max_lat, zoom).floor() as u32; 
+        min_ty = lat_to_y(pad_max_lat, zoom).floor() as u32;
         max_ty = lat_to_y(pad_min_lat, zoom).floor() as u32;
 
         let tiles_x = max_tx - min_tx + 1;
@@ -107,7 +108,10 @@ fn fetch_layer(
     let tiles_x = max_tx - min_tx + 1;
     let tiles_y = max_ty - min_ty + 1;
     let tile_res = 256;
-    println!("Fetching Google {} tiles at zoom {} ({}x{} grid)...", suffix, zoom, tiles_x, tiles_y);
+    println!(
+        "Fetching Google {} tiles at zoom {} ({}x{} grid)...",
+        suffix, zoom, tiles_x, tiles_y
+    );
 
     let mut stitched_img = RgbaImage::new(tiles_x * tile_res, tiles_y * tile_res);
 
@@ -119,30 +123,48 @@ fn fetch_layer(
         }
     }
 
-    let fetched_tiles: Vec<Result<((u32, u32), Vec<u8>), String>> = tile_coords.par_iter().map(|&(tx, ty)| {
-        let url = format!("https://mt1.google.com/vt/lyrs=s&x={}&y={}&z={}", tx, ty, zoom);
-        let response = ureq::get(&url).call().map_err(|e| format!("Network error: {}", e))?;
-        let mut bytes = Vec::new();
-        response.into_body().into_reader().read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        Ok(((tx, ty), bytes))
-    }).collect();
+    let fetched_tiles: Vec<Result<((u32, u32), Vec<u8>), String>> = tile_coords
+        .par_iter()
+        .map(|&(tx, ty)| {
+            let url = format!(
+                "https://mt1.google.com/vt/lyrs=s&x={}&y={}&z={}",
+                tx, ty, zoom
+            );
+            let response = ureq::get(&url)
+                .call()
+                .map_err(|e| format!("Network error: {}", e))?;
+            let mut bytes = Vec::new();
+            response
+                .into_body()
+                .into_reader()
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            Ok(((tx, ty), bytes))
+        })
+        .collect();
 
     for res in fetched_tiles {
         if let Ok(((tx, ty), bytes)) = res {
             if let Ok(img) = image::load_from_memory(&bytes) {
-                stitched_img.copy_from(&img.to_rgba8(), (tx - min_tx) * tile_res, (ty - min_ty) * tile_res).ok();
+                stitched_img
+                    .copy_from(
+                        &img.to_rgba8(),
+                        (tx - min_tx) * tile_res,
+                        (ty - min_ty) * tile_res,
+                    )
+                    .ok();
             }
         }
     }
 
     let mut final_bytes = Vec::new();
     stitched_img.write_to(&mut Cursor::new(&mut final_bytes), image::ImageFormat::Png)?;
-    
+
     fs::write(&cache_path, &final_bytes)?;
     if let Ok(bounds_json) = serde_json::to_string(&final_bounds) {
         let _ = fs::write(&bounds_path, bounds_json);
     }
-    
+
     Ok((final_bytes, final_bounds))
 }
 
@@ -159,7 +181,17 @@ pub fn fetch_google_map_image(
         fs::create_dir_all(maps_dir)?;
     }
 
-    let (bg_bytes, bg_bounds) = match fetch_layer(track_id, min_lon, min_lat, max_lon, max_lat, 10.0, 4, "google_bg", maps_dir) {
+    let (bg_bytes, bg_bounds) = match fetch_layer(
+        track_id,
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+        10.0,
+        4,
+        "google_bg",
+        maps_dir,
+    ) {
         Ok((b, bounds)) => (Some(b), Some(bounds)),
         Err(e) => {
             eprintln!("Failed to fetch BG layer: {}", e);
@@ -167,7 +199,17 @@ pub fn fetch_google_map_image(
         }
     };
 
-    let (fg_bytes, fg_bounds) = fetch_layer(track_id, min_lon, min_lat, max_lon, max_lat, 1.4, max_grid_size, "google", maps_dir)?;
+    let (fg_bytes, fg_bounds) = fetch_layer(
+        track_id,
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+        1.4,
+        max_grid_size,
+        "google",
+        maps_dir,
+    )?;
 
     Ok((fg_bytes, fg_bounds, bg_bytes, bg_bounds))
 }

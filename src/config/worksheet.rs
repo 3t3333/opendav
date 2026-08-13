@@ -1,13 +1,13 @@
-pub const DARK_BG_COLOR: egui::Color32 = egui::Color32::from_rgb(10, 10, 10);      // #0A0A0A Obsidian
+pub const DARK_BG_COLOR: egui::Color32 = egui::Color32::from_rgb(10, 10, 10); // #0A0A0A Obsidian
 pub const LIGHT_BG_COLOR: egui::Color32 = egui::Color32::from_rgb(227, 226, 225); // #E3E2E1 Slate White
-pub const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(242, 82, 37);      // #F25225 Electric Blaze Orange
+pub const ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(242, 82, 37); // #F25225 Electric Blaze Orange
 pub const SUB_ACCENT_COLOR: egui::Color32 = egui::Color32::from_rgb(102, 72, 212); // #6648D4 Electric Indigo Purple
-pub const SPEED_COLOR: egui::Color32 = egui::Color32::from_rgb(78, 159, 245);      // Calm Sky Blue for Ground Speed
+pub const SPEED_COLOR: egui::Color32 = egui::Color32::from_rgb(78, 159, 245); // Calm Sky Blue for Ground Speed
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum WorksheetTab {
-    Driver,            // 1. Basic (Driver Inputs: Speed, Throttle, Brake, Steering, RPM, Gear)
-    Vehicle,           // 2. Basic Vehicle (Ground Speed, Ride Heights, Rake, Lat G, Long G)
+    Driver,  // 1. Basic (Driver Inputs: Speed, Throttle, Brake, Steering, RPM, Gear)
+    Vehicle, // 2. Basic Vehicle (Ground Speed, Ride Heights, Rake, Lat G, Long G)
     Tyre,
     Shocks,
     TireEnergy,        // 3. Tire Energy Profiler
@@ -31,7 +31,7 @@ pub enum CacheSelector {
     Steering,
     FrontHeight,
     RearHeight,
-    Rake, 
+    Rake,
     LatG,
     LongG,
     Gear,
@@ -86,12 +86,8 @@ pub const SHOCK_CHANNEL_GROUPS: [[CacheSelector; 1]; 4] = [
     [CacheSelector::RrShockDeflection],
 ];
 
-pub const STACKED_LANE_RANGES: [(f64, f64); 4] = [
-    (76.0, 98.0),
-    (52.0, 72.0),
-    (28.0, 48.0),
-    (10.0, 24.0),
-];
+pub const STACKED_LANE_RANGES: [(f64, f64); 4] =
+    [(76.0, 98.0), (52.0, 72.0), (28.0, 48.0), (10.0, 24.0)];
 
 pub fn worksheet_channel_group(
     selector: CacheSelector,
@@ -209,7 +205,7 @@ impl WorksheetConfig {
                     y_min: 52.0,
                     y_max: 72.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
+                    traces: vec![
                         TraceSpec {
                             name: "RPM",
                             cache: CacheSelector::RPM,
@@ -231,7 +227,7 @@ impl WorksheetConfig {
                     y_min: 28.0,
                     y_max: 48.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
+                    traces: vec![
                         TraceSpec {
                             name: "Throttle",
                             cache: CacheSelector::Throttle,
@@ -293,7 +289,7 @@ impl WorksheetConfig {
                     y_min: 45.0,
                     y_max: 75.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
+                    traces: vec![
                         TraceSpec {
                             name: "Front Height",
                             cache: CacheSelector::FrontHeight,
@@ -322,7 +318,7 @@ impl WorksheetConfig {
                     y_min: 10.0,
                     y_max: 40.0,
                     scaling: LaneScaling::Mono,
-            traces: vec![
+                    traces: vec![
                         TraceSpec {
                             name: "Lateral G",
                             cache: CacheSelector::LatG,
@@ -371,20 +367,60 @@ impl WorksheetConfig {
 
         Self {
             lanes: vec![
-                lane("Left Front Tyre", STACKED_LANE_RANGES[0], ["LF Center", "LF Inner", "LF Outer"], TYRE_CHANNEL_GROUPS[0], theme.tyre_lf),
-                lane("Right Front Tyre", STACKED_LANE_RANGES[1], ["RF Center", "RF Inner", "RF Outer"], TYRE_CHANNEL_GROUPS[1], theme.tyre_rf),
-                lane("Left Rear Tyre", STACKED_LANE_RANGES[2], ["LR Center", "LR Inner", "LR Outer"], TYRE_CHANNEL_GROUPS[2], theme.tyre_lr),
-                lane("Right Rear Tyre", STACKED_LANE_RANGES[3], ["RR Center", "RR Inner", "RR Outer"], TYRE_CHANNEL_GROUPS[3], theme.tyre_rr),
+                lane(
+                    "Left Front Tyre",
+                    STACKED_LANE_RANGES[0],
+                    ["LF Center", "LF Inner", "LF Outer"],
+                    TYRE_CHANNEL_GROUPS[0],
+                    theme.tyre_lf,
+                ),
+                lane(
+                    "Right Front Tyre",
+                    STACKED_LANE_RANGES[1],
+                    ["RF Center", "RF Inner", "RF Outer"],
+                    TYRE_CHANNEL_GROUPS[1],
+                    theme.tyre_rf,
+                ),
+                lane(
+                    "Left Rear Tyre",
+                    STACKED_LANE_RANGES[2],
+                    ["LR Center", "LR Inner", "LR Outer"],
+                    TYRE_CHANNEL_GROUPS[2],
+                    theme.tyre_lr,
+                ),
+                lane(
+                    "Right Rear Tyre",
+                    STACKED_LANE_RANGES[3],
+                    ["RR Center", "RR Inner", "RR Outer"],
+                    TYRE_CHANNEL_GROUPS[3],
+                    theme.tyre_rr,
+                ),
             ],
         }
     }
 
     pub fn shocks(theme: AppTheme) -> Self {
         let corners = [
-            ("Left Front Shock", "LF Deflection", CacheSelector::LfShockDeflection),
-            ("Right Front Shock", "RF Deflection", CacheSelector::RfShockDeflection),
-            ("Left Rear Shock", "LR Deflection", CacheSelector::LrShockDeflection),
-            ("Right Rear Shock", "RR Deflection", CacheSelector::RrShockDeflection),
+            (
+                "Left Front Shock",
+                "LF Deflection",
+                CacheSelector::LfShockDeflection,
+            ),
+            (
+                "Right Front Shock",
+                "RF Deflection",
+                CacheSelector::RfShockDeflection,
+            ),
+            (
+                "Left Rear Shock",
+                "LR Deflection",
+                CacheSelector::LrShockDeflection,
+            ),
+            (
+                "Right Rear Shock",
+                "RR Deflection",
+                CacheSelector::RrShockDeflection,
+            ),
         ];
         Self {
             lanes: corners

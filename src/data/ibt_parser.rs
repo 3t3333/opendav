@@ -1,9 +1,9 @@
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use byteorder::{LittleEndian, ReadBytesExt};
 use polars::prelude::*;
-use std::path::Path;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ pub struct IbtSession {
     pub lap_times: Vec<(i32, f64)>, // (Lap Number, Duration in Seconds)
     pub total_session_time: f64,
     pub channel_units: std::collections::HashMap<String, String>,
-    
+
     // Highly optimized raw caching vectors for real-time 300FPS GUI lookups
     pub distance: Vec<f64>,
     pub front_raw: Vec<f64>,
@@ -40,11 +40,13 @@ pub struct IbtSession {
     pub laps: Vec<i32>,
 }
 
-// Highly-optimized O(N) sliding window causal moving average filter 
+// Highly-optimized O(N) sliding window causal moving average filter
 pub fn moving_average(data: &[f64], window: usize) -> Vec<f64> {
     let n = data.len();
     let mut out = vec![0.0; n];
-    if n == 0 { return out; }
+    if n == 0 {
+        return out;
+    }
     let w = window.clamp(1, n);
     let mut running_sum = 0.0;
     for i in 0..n {
@@ -59,7 +61,9 @@ pub fn moving_average(data: &[f64], window: usize) -> Vec<f64> {
     out
 }
 
-pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dyn std::error::Error>> {
+pub fn parse_ibt_file<P: AsRef<Path>>(
+    file_path: P,
+) -> Result<IbtSession, Box<dyn std::error::Error>> {
     let mut f = File::open(&file_path)?;
     let file_len = f.metadata()?.len();
 
@@ -67,16 +71,16 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     let _session_num = f.read_i32::<LittleEndian>()?;
     let _session_tick = f.read_i32::<LittleEndian>()?;
     let _session_rate = f.read_f64::<LittleEndian>()?;
-    
+
     // Header offsets
     let session_info_len = f.read_i32::<LittleEndian>()? as usize;
     let session_info_offset = f.read_i32::<LittleEndian>()? as u64;
     let num_vars = f.read_i32::<LittleEndian>()? as usize;
     let var_header_offset = f.read_i32::<LittleEndian>()? as u64;
-    
+
     let _num_buf = f.read_i32::<LittleEndian>()?;
     let buf_len = f.read_i32::<LittleEndian>()? as usize;
-    
+
     // Seek to buf offset in header (offset 52)
     f.seek(SeekFrom::Start(52))?;
     let buf_offset = f.read_i32::<LittleEndian>()? as u64;
@@ -126,20 +130,20 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     // 3. Parse Variable Headers (144 bytes each)
     f.seek(SeekFrom::Start(var_header_offset))?;
     let mut var_headers = Vec::with_capacity(num_vars);
-    
+
     for _ in 0..num_vars {
         let mut var_buf = vec![0u8; 144];
         f.read_exact(&mut var_buf)?;
 
         let v_type = i32::from_le_bytes([var_buf[0], var_buf[1], var_buf[2], var_buf[3]]);
         let offset = i32::from_le_bytes([var_buf[4], var_buf[5], var_buf[6], var_buf[7]]);
-        
+
         // Extract null-terminated strings for name & unit
         let name_bytes = &var_buf[16..48];
         let name = String::from_utf8_lossy(name_bytes)
             .trim_end_matches('\0')
             .to_string();
-            
+
         let unit_bytes = &var_buf[112..144];
         let unit = String::from_utf8_lossy(unit_bytes)
             .trim_end_matches('\0')
@@ -168,24 +172,49 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
         for (v_idx, var) in var_headers.iter().enumerate() {
             let offset = row_offset + var.offset as usize;
             let val = match var.var_type {
-                0 => raw_bytes[offset] as i8 as f64, // Char
+                0 => raw_bytes[offset] as i8 as f64,        // Char
                 1 => (raw_bytes[offset] > 0) as i32 as f64, // Bool
-                2 => { // Int32
-                    let b = [raw_bytes[offset], raw_bytes[offset+1], raw_bytes[offset+2], raw_bytes[offset+3]];
+                2 => {
+                    // Int32
+                    let b = [
+                        raw_bytes[offset],
+                        raw_bytes[offset + 1],
+                        raw_bytes[offset + 2],
+                        raw_bytes[offset + 3],
+                    ];
                     i32::from_le_bytes(b) as f64
                 }
-                3 => { // Uint32
-                    let b = [raw_bytes[offset], raw_bytes[offset+1], raw_bytes[offset+2], raw_bytes[offset+3]];
+                3 => {
+                    // Uint32
+                    let b = [
+                        raw_bytes[offset],
+                        raw_bytes[offset + 1],
+                        raw_bytes[offset + 2],
+                        raw_bytes[offset + 3],
+                    ];
                     u32::from_le_bytes(b) as f64
                 }
-                4 => { // Float32
-                    let b = [raw_bytes[offset], raw_bytes[offset+1], raw_bytes[offset+2], raw_bytes[offset+3]];
+                4 => {
+                    // Float32
+                    let b = [
+                        raw_bytes[offset],
+                        raw_bytes[offset + 1],
+                        raw_bytes[offset + 2],
+                        raw_bytes[offset + 3],
+                    ];
                     f32::from_le_bytes(b) as f64
                 }
-                5 => { // Float64
+                5 => {
+                    // Float64
                     let b = [
-                        raw_bytes[offset], raw_bytes[offset+1], raw_bytes[offset+2], raw_bytes[offset+3],
-                        raw_bytes[offset+4], raw_bytes[offset+5], raw_bytes[offset+6], raw_bytes[offset+7]
+                        raw_bytes[offset],
+                        raw_bytes[offset + 1],
+                        raw_bytes[offset + 2],
+                        raw_bytes[offset + 3],
+                        raw_bytes[offset + 4],
+                        raw_bytes[offset + 5],
+                        raw_bytes[offset + 6],
+                        raw_bytes[offset + 7],
                     ];
                     f64::from_le_bytes(b)
                 }
@@ -206,7 +235,7 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     if let (Some(l_idx), Some(t_idx)) = (lap_idx, time_idx) {
         let lap_vec = &channel_vectors[l_idx];
         let time_vec = &channel_vectors[t_idx];
-        
+
         if !time_vec.is_empty() {
             total_session_time = time_vec[time_vec.len() - 1] - time_vec[0];
         }
@@ -218,17 +247,23 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
             if lap_val <= 0 {
                 continue; // Skip out-laps / pit entry warmups
             }
-            lap_ranges.entry(lap_val)
+            lap_ranges
+                .entry(lap_val)
                 .and_modify(|range| {
-                    if time_val < range.0 { range.0 = time_val; }
-                    if time_val > range.1 { range.1 = time_val; }
+                    if time_val < range.0 {
+                        range.0 = time_val;
+                    }
+                    if time_val > range.1 {
+                        range.1 = time_val;
+                    }
                 })
                 .or_insert((time_val, time_val));
         }
     }
 
     // Compile lap times
-    let mut raw_lap_times: Vec<(i32, f64)> = lap_ranges.into_iter()
+    let mut raw_lap_times: Vec<(i32, f64)> = lap_ranges
+        .into_iter()
         .map(|(lap_num, (start, end))| (lap_num, end - start))
         .filter(|(_, duration)| *duration > 1.0) // Filter out 0-second artifacts
         .collect();
@@ -237,7 +272,8 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
 
     // Filter out short glitch laps (e.g. less than 10s) and keep valid laps.
     // A lap is discarded as a glitch/reset if it is less than 75% of the median lap time.
-    let mut filtered_laps: Vec<(i32, f64)> = raw_lap_times.into_iter()
+    let mut filtered_laps: Vec<(i32, f64)> = raw_lap_times
+        .into_iter()
         .filter(|(_, t)| *t >= 10.0)
         .collect();
 
@@ -254,22 +290,39 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     // -------------------------------------------------------------------------
     // PRECOMPUTED DERIVED MATHEMATICS & SIGNAL FILTERS (Dynamic Rake, etc.)
     // -------------------------------------------------------------------------
-    
+
     // Quick closure helper to retrieve channel array with fallbacks
-    let get_channel_any = |names: &[&str], var_headers: &[VarHeader], channel_vectors: &Vec<Vec<f64>>| -> Vec<f64> {
-        for name in names {
-            if let Some(idx) = var_headers.iter().position(|v| v.name == *name) {
-                return channel_vectors[idx].clone();
+    let get_channel_any =
+        |names: &[&str], var_headers: &[VarHeader], channel_vectors: &Vec<Vec<f64>>| -> Vec<f64> {
+            for name in names {
+                if let Some(idx) = var_headers.iter().position(|v| v.name == *name) {
+                    return channel_vectors[idx].clone();
+                }
             }
-        }
-        vec![0.0; num_samples]
-    };
+            vec![0.0; num_samples]
+        };
 
     // Retrieve Front & Rear Ride Heights
-    let fl_rh = get_channel_any(&["Ride Height FL", "LFrideHeight", "LFshockDefl"], &var_headers, &channel_vectors);
-    let fr_rh = get_channel_any(&["Ride Height FR", "RFrideHeight", "RFshockDefl"], &var_headers, &channel_vectors);
-    let rl_rh = get_channel_any(&["Ride Height RL", "LRrideHeight", "LRshockDefl"], &var_headers, &channel_vectors);
-    let rr_rh = get_channel_any(&["Ride Height RR", "RRrideHeight", "RRshockDefl"], &var_headers, &channel_vectors);
+    let fl_rh = get_channel_any(
+        &["Ride Height FL", "LFrideHeight", "LFshockDefl"],
+        &var_headers,
+        &channel_vectors,
+    );
+    let fr_rh = get_channel_any(
+        &["Ride Height FR", "RFrideHeight", "RFshockDefl"],
+        &var_headers,
+        &channel_vectors,
+    );
+    let rl_rh = get_channel_any(
+        &["Ride Height RL", "LRrideHeight", "LRshockDefl"],
+        &var_headers,
+        &channel_vectors,
+    );
+    let rr_rh = get_channel_any(
+        &["Ride Height RR", "RRrideHeight", "RRshockDefl"],
+        &var_headers,
+        &channel_vectors,
+    );
 
     // Calculate Averaged Front/Rear Axle Ride Heights (multiply deflection by 1000 to convert to mm)
     let mut front_avg = vec![0.0; num_samples];
@@ -305,7 +358,10 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     }
 
     // Derive dynamic Distance vector if none exists
-    let dist_vec = if let Some(d_idx) = var_headers.iter().position(|v| v.name == "Distance" || v.name == "LapDist") {
+    let dist_vec = if let Some(d_idx) = var_headers
+        .iter()
+        .position(|v| v.name == "Distance" || v.name == "LapDist")
+    {
         channel_vectors[d_idx].clone()
     } else {
         let mut d = vec![0.0; num_samples];
@@ -335,9 +391,7 @@ pub fn parse_ibt_file<P: AsRef<Path>>(file_path: P) -> Result<IbtSession, Box<dy
     let dataframe = DataFrame::new(series_list)?;
 
     // Extract File Timestamp
-    let file_path_str = file_path.as_ref()
-        .to_string_lossy()
-        .to_string();
+    let file_path_str = file_path.as_ref().to_string_lossy().to_string();
 
     let mut channel_units = std::collections::HashMap::new();
     for var in &var_headers {

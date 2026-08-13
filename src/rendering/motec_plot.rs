@@ -49,9 +49,7 @@ fn display_value_and_unit(
     }
 }
 
-fn note_context_range(
-    context: &crate::simgit::repository::AnalysisContext,
-) -> Option<(f64, f64)> {
+fn note_context_range(context: &crate::simgit::repository::AnalysisContext) -> Option<(f64, f64)> {
     context.time_range()
 }
 
@@ -92,50 +90,50 @@ impl OpenDavApp {
                     .dataframe
                     .column("Speed")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) * 3.6)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) * 3.6)
                     .unwrap_or(0.0),
                 CacheSelector::RPM => session
                     .dataframe
                     .column("RPM")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0))
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0))
                     .unwrap_or(0.0),
                 CacheSelector::Throttle => session
                     .dataframe
                     .column("Throttle")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
                     .unwrap_or(0.0),
                 CacheSelector::Brake => session
                     .dataframe
                     .column("Brake")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
                     .unwrap_or(0.0),
                 CacheSelector::Steering => session
                     .dataframe
                     .column("SteeringWheelAngle")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) * 57.2958)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) * 57.2958)
                     .unwrap_or(0.0),
                 CacheSelector::LatG => session
                     .dataframe
                     .column("LatAccel")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) / 9.80665)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) / 9.80665)
                     .unwrap_or(0.0),
                 CacheSelector::LongG => session
                     .dataframe
                     .column("LongAccel")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) / 9.80665)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) / 9.80665)
                     .unwrap_or(0.0),
                 CacheSelector::FrontHeight => {
                     if idx < session.front_raw.len() {
@@ -162,15 +160,15 @@ impl OpenDavApp {
                     .dataframe
                     .column("Gear")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0))
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0))
                     .unwrap_or(0.0),
                 CacheSelector::Clutch => session
                     .dataframe
                     .column("ClutchRaw")
                     .ok()
-                        .and_then(|c| c.f64().ok())
-                        .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
+                    .and_then(|c| c.f64().ok())
+                    .map(|c| c.get(idx).unwrap_or(0.0) * 100.0)
                     .unwrap_or(0.0),
                 CacheSelector::DistanceDelta => {
                     let loaded = &self.sessions[session_idx];
@@ -254,7 +252,7 @@ impl OpenDavApp {
         if loaded.front_pts_cache.is_empty() {
             return;
         }
-        
+
         let max_time = loaded.front_pts_cache.last().unwrap()[0];
         let is_dark = ui.style().visuals.dark_mode;
         let theme = AppTheme::for_mode(is_dark);
@@ -336,155 +334,6 @@ impl OpenDavApp {
             });
         }
 
-        // 3. RENDER MASTER DYNAMIC HUD HEADERS ROW
-        ui.vertical(|ui| {
-            ui.horizontal_wrapped(|ui| {
-                if let Some(cx) = self.cursor_x {
-                    ui.colored_label(
-                        theme.accent_text,
-                        format!("PLAYBACK @ {}", format_lap_time(cx)),
-                    );
-                    for lane in &lanes {
-                        for trace in &lane.traces {
-                            ui.separator();
-                            let val_fmt = if trace.name == "Gear" {
-                                format!("{:.0}", trace.raw_val)
-                            } else {
-                                format!("{:.1}", trace.raw_val)
-                            };
-                            ui.colored_label(
-                                trace.color,
-                                format!("{}: {}{}", trace.name, val_fmt, trace.unit),
-                            );
-                        }
-                    }
-                }
-            });
-
-            if self.comparison_cyan.is_some() {
-                ui.horizontal_wrapped(|ui| {
-                    if self.cursor_x.is_some() {
-                        ui.colored_label(theme.reference_primary, "CYAN REFERENCE");
-                        for lane in &lanes {
-                            for trace in &lane.traces {
-                                ui.separator();
-                                if let Some(r_val) = trace.cyan_ref_val {
-                                    let ref_val_fmt = if trace.name == "Gear" {
-                                        format!("{:.0}", r_val)
-                                } else {
-                                        format!("{:.1}", r_val)
-                                    };
-                                    ui.colored_label(
-                                        theme.reference_primary,
-                                        format!("{}: {}{}", trace.name, ref_val_fmt, trace.unit),
-                                    );
-                                } else {
-                                    ui.colored_label(
-                                        theme.text_disabled,
-                                        format!("{}: N/A{}", trace.name, trace.unit),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
-
-                ui.horizontal_wrapped(|ui| {
-                    if self.cursor_x.is_some() {
-                        ui.colored_label(theme.reference_primary, "CYAN DELTA");
-                        for lane in &lanes {
-                            for trace in &lane.traces {
-                                ui.separator();
-                                if let Some(r_val) = trace.cyan_ref_val {
-                                    let delta = trace.raw_val - r_val; // base - reference
-                                    let sign = if delta > 0.0 { "+" } else { "" };
-                                    let color = if delta <= 0.0 {
-                                        theme.success
-                                    } else {
-                                        theme.danger
-                                    };
-                                    ui.colored_label(
-                                        color,
-                                        format!(
-                                            "{}: {}{:.1}{}",
-                                            trace.name, sign, delta, trace.unit
-                                        ),
-                                    );
-                                } else {
-                                    ui.colored_label(
-                                        theme.text_disabled,
-                                        format!("{}: N/A{}", trace.name, trace.unit),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-
-            if self.comparison_secondary.is_some() {
-                ui.horizontal_wrapped(|ui| {
-                    if self.cursor_x.is_some() {
-                        ui.colored_label(theme.reference_secondary, "SECONDARY REFERENCE");
-                        for lane in &lanes {
-                            for trace in &lane.traces {
-                                ui.separator();
-                                if let Some(value) = trace.secondary_ref_val {
-                                    let value = if trace.name == "Gear" {
-                                        format!("{value:.0}")
-                                    } else {
-                                        format!("{value:.1}")
-                                    };
-                                    ui.colored_label(
-                                        theme.reference_secondary,
-                                        format!("{}: {}{}", trace.name, value, trace.unit),
-                                    );
-                                } else {
-                                    ui.colored_label(
-                                        theme.text_disabled,
-                                        format!("{}: N/A{}", trace.name, trace.unit),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
-
-                ui.horizontal_wrapped(|ui| {
-                    if self.cursor_x.is_some() {
-                        ui.colored_label(theme.reference_secondary, "SECONDARY DELTA");
-                        for lane in &lanes {
-                            for trace in &lane.traces {
-                                ui.separator();
-                                if let Some(reference) = trace.secondary_ref_val {
-                                    let delta = trace.raw_val - reference;
-                                    let sign = if delta > 0.0 { "+" } else { "" };
-                                    let color = if delta <= 0.0 {
-                                        theme.success
-                                    } else {
-                                        theme.danger
-                                    };
-                                    ui.colored_label(
-                                        color,
-                                        format!(
-                                            "{}: {}{:.1}{}",
-                                            trace.name, sign, delta, trace.unit
-                                        ),
-                                    );
-                                } else {
-                                    ui.colored_label(
-                                        theme.text_disabled,
-                                        format!("{}: N/A{}", trace.name, trace.unit),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        });
-        ui.add_space(4.0);
-
         // 4. INITIALIZE UNIFIED PLOT CANVAS
         let mut plot_height = ui.available_height() - 10.0;
         if plot_height < 300.0 {
@@ -526,7 +375,7 @@ impl OpenDavApp {
         let mut highlight_start = self.highlight_start;
         let mut active_simgit_note_id = self.active_simgit_note_id.clone();
         let mut simgit_note_to_open = None;
-        
+
         let selected_lap = self.selected_lap;
         let lap_ranges = &loaded.lap_ranges;
         let lap_markers = &loaded.lap_markers;
@@ -717,7 +566,7 @@ impl OpenDavApp {
                 .min(pts.len());
                 let slice = &pts[start_idx..end_idx];
                 let m = slice.len();
-                
+
                 #[cfg(feature = "dev_tools")]
                 {
                     debug_pts_culled_clone.set(debug_pts_culled_clone.get() + (pts.len() - m));
@@ -736,13 +585,13 @@ impl OpenDavApp {
                     while idx < m - 1 {
                         let chunk_end = (idx + stride).min(m - 1);
                         let chunk = &slice[idx..chunk_end];
-                        
+
                         if !chunk.is_empty() {
                             let mut min_idx = 0;
                             let mut max_idx = 0;
                             let mut min_val = chunk[0][1];
                             let mut max_val = chunk[0][1];
-                            
+
                             for (i, p) in chunk.iter().enumerate() {
                                 if p[1] < min_val {
                                     min_val = p[1];
@@ -753,7 +602,7 @@ impl OpenDavApp {
                                     max_idx = i;
                                 }
                             }
-                            
+
                             if min_idx < max_idx {
                                 downsampled.push(chunk[min_idx]);
                                 downsampled.push(chunk[max_idx]);
@@ -797,11 +646,7 @@ impl OpenDavApp {
                 } else {
                     0.14
                 };
-                let stroke_width = if is_active {
-                    3.0
-                } else {
-                    1.0
-                };
+                let stroke_width = if is_active { 3.0 } else { 1.0 };
                 plot_ui.polygon(
                     Polygon::new(
                         format!("SimGitNoteZone_{}", note.id),
@@ -829,7 +674,7 @@ impl OpenDavApp {
                 let tab_left = left.min(right).max(plot_rect.left());
                 let tab_right = left.max(right).min(plot_rect.right());
                 let tab_width = (tab_right - tab_left).max(1.0);
-                let tab_position = egui::pos2(tab_left, plot_rect.top() + 3.0);
+                let tab_position = egui::pos2(tab_left, plot_rect.bottom() - 25.0);
                 let section_delta = note.resolved_section_delta(&loaded.time_delta_pts_cache);
                 egui::Area::new(egui::Id::new(("simgit_chart_note_tab", &note.id)))
                     .order(egui::Order::Foreground)
@@ -892,7 +737,7 @@ impl OpenDavApp {
                         if let Some(pos) = loaded.lap_ranges.iter().position(|r| r.0 == sel_lap_num)
                         {
                             let start_t = loaded.lap_ranges[pos].1;
-                        
+
                             for (s_idx, sector) in loaded.sectors.iter().enumerate() {
                                 let delta = sector_deltas.get(s_idx).copied().flatten();
                                 if let Some(d) = delta {
@@ -908,7 +753,7 @@ impl OpenDavApp {
                                             &lap_data.time,
                                             sector.end_dist,
                                         );
-                                    
+
                                     let abs_start = start_t + sector_start_t;
                                     let abs_end = start_t + sector_end_t;
 
@@ -929,12 +774,12 @@ impl OpenDavApp {
 
                                         plot_ui.polygon(
                                             Polygon::new(
-                                            format!("ChartSectorDeltaBg_{}", sector.name),
-                                            PlotPoints::from(vec![
-                                                [abs_start, 10.0],
-                                                [abs_end, 10.0],
-                                                [abs_end, 1000.0],
-                                                [abs_start, 1000.0],
+                                                format!("ChartSectorDeltaBg_{}", sector.name),
+                                                PlotPoints::from(vec![
+                                                    [abs_start, 10.0],
+                                                    [abs_end, 10.0],
+                                                    [abs_end, 1000.0],
+                                                    [abs_start, 1000.0],
                                                 ]),
                                             )
                                             .fill_color(bg_color)
@@ -981,7 +826,7 @@ impl OpenDavApp {
                         "Dynamic Rake" => Some("Rake Angle Smooth"),
                         _ => None,
                     };
-                    
+
                     if let Some(smooth_name) = smooth_cache_name {
                         let smooth_pts =
                             self.sessions[self.primary_session_idx].get_cache_slice(smooth_name);
@@ -1015,9 +860,9 @@ impl OpenDavApp {
                             .color(trace.color)
                             .width(trace.width),
                     );
+                }
             }
-                            }
-                            
+
             // F. DRAW PRECOMPUTED, DISTANCE-ALIGNED REFERENCE OVERLAYS
             if let Some(cache) = self.comparison_cyan.as_ref() {
                 for lane in &lanes {
@@ -1055,7 +900,7 @@ impl OpenDavApp {
                     plot_ui.vline(
                         VLine::new(format!("LapSeparator_{}", lap_start_time), lap_start_time)
                             .color(theme.danger.gamma_multiply(0.55))
-                        .style(egui_plot::LineStyle::dotted_dense())
+                            .style(egui_plot::LineStyle::dotted_dense())
                             .width(1.0),
                     );
                 }
@@ -1079,7 +924,7 @@ impl OpenDavApp {
                             .size(10.0)
                             .strong(),
                     ));
-                    
+
                     // I2. DRAW SECTOR LABELS ON TICKER
                     if let Some(lap_data) =
                         loaded.lap_data_cache.iter().find(|l| l.lap_num == lap_num)
@@ -1096,38 +941,38 @@ impl OpenDavApp {
                                 &lap_data.time,
                                 sector.end_dist,
                             );
-                            
+
                             let abs_start = start_t + sector_start_t;
                             let abs_end = start_t + sector_end_t;
-                            
+
                             if abs_end >= min_visible_x && abs_start <= max_visible_x {
                                 let sec_center = (abs_start + abs_end) / 2.0;
                                 let sector_width_s = abs_end - abs_start;
                                 let ratio = sector_width_s / visible_width;
-                                
+
                                 let is_even = sec_idx % 2 == 0;
-                                let bg_color = if is_even { 
+                                let bg_color = if is_even {
                                     if is_dark {
                                         egui::Color32::from_rgba_unmultiplied(200, 200, 200, 4)
                                     } else {
                                         egui::Color32::from_rgba_unmultiplied(20, 20, 20, 4)
                                     }
-                                } else { 
+                                } else {
                                     if is_dark {
                                         egui::Color32::from_rgba_unmultiplied(200, 200, 200, 16)
                                     } else {
                                         egui::Color32::from_rgba_unmultiplied(20, 20, 20, 16)
                                     }
                                 };
-                                
+
                                 plot_ui.polygon(
                                     Polygon::new(
-                                    format!("TickerSectorBg_{}_{}", lap_num, sector.name),
-                                    PlotPoints::from(vec![
-                                        [abs_start, 0.0],
-                                        [abs_end, 0.0],
-                                        [abs_end, 9.5],
-                                        [abs_start, 9.5],
+                                        format!("TickerSectorBg_{}_{}", lap_num, sector.name),
+                                        PlotPoints::from(vec![
+                                            [abs_start, 0.0],
+                                            [abs_end, 0.0],
+                                            [abs_end, 9.5],
+                                            [abs_start, 9.5],
                                         ]),
                                     )
                                     .fill_color(bg_color)
@@ -1136,15 +981,15 @@ impl OpenDavApp {
 
                                 let parts: Vec<&str> = sector.name.split(" - ").collect();
                                 let short_name = parts[0];
-                                
+
                                 let est_px_width = ratio * 1200.0;
                                 let req_px_width = short_name.len() as f64 * 7.5;
-                                
+
                                 if est_px_width > req_px_width {
                                     let dynamic_font_size =
                                         (ratio * 400.0).clamp(10.0, 12.0) as f32;
                                     let text_color = theme.text_secondary;
-                                    
+
                                     plot_ui.text(Text::new(
                                         format!("TickerSector_{}_{}", lap_num, sector.name),
                                         PlotPoint::new(sec_center, 4.75),
@@ -1172,7 +1017,7 @@ impl OpenDavApp {
                         .collect::<Vec<f64>>(),
                     cx,
                 );
-                
+
                 for lane in &lanes {
                     for trace in &lane.traces {
                         if idx < trace.scaled_pts.len() {
@@ -1195,6 +1040,79 @@ impl OpenDavApp {
                         .shape(egui_plot::MarkerShape::Up)
                         .radius(10.0),
                 );
+            }
+
+            // J. RENDER DYNAMIC MOTEC TOOLTIPS PER LANE
+            if cursor_x.is_some() {
+                for (lane_idx, lane) in lanes.iter().enumerate() {
+                    let top_left_plot = PlotPoint::new(min_visible_x, lane.y_max);
+                    let pos = plot_ui.screen_from_plot(top_left_plot);
+
+                    egui::Area::new(egui::Id::new(("lane_tooltip", lane_idx)))
+                        .fixed_pos(pos)
+                        .pivot(egui::Align2::LEFT_TOP)
+                        .order(egui::Order::Tooltip)
+                        .show(plot_ui.ctx(), |ui| {
+                            egui::Frame::NONE
+                                .fill(egui::Color32::from_black_alpha(60))
+                                .corner_radius(2.0)
+                                .inner_margin(2.0)
+                                .show(ui, |ui| {
+                                    for trace in &lane.traces {
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 3.0;
+                                            
+                                            let draw_badge = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
+                                                let (rect, _) = ui.allocate_exact_size(egui::vec2(11.0, 11.0), egui::Sense::hover());
+                                                ui.painter().rect_filled(rect, 1.0, color);
+                                                let text_color = if color.r() as u32 + color.g() as u32 + color.b() as u32 > 380 { egui::Color32::BLACK } else { egui::Color32::WHITE };
+                                                ui.painter().text(
+                                                    rect.center(),
+                                                    egui::Align2::CENTER_CENTER,
+                                                    text,
+                                                    egui::FontId::proportional(8.5).clone(),
+                                                    text_color
+                                                );
+                                            };
+
+                                            let val_fmt = if trace.name == "Gear" { format!("{:.0}", trace.raw_val) } else { format!("{:.1}", trace.raw_val) };
+                                            ui.label(egui::RichText::new(format!("{} [{}]", trace.name, trace.unit)).color(egui::Color32::WHITE).size(8.5));
+                                            ui.add_space(2.0);
+                                            draw_badge(ui, "0", trace.color);
+                                            ui.label(egui::RichText::new(val_fmt).color(trace.color).size(8.5));
+
+                                            // Ref 1 (Primary / White)
+                                            if let Some(ref_1) = trace.cyan_ref_val {
+                                                ui.add_space(4.0);
+                                                draw_badge(ui, "1", theme.reference_primary);
+                                                let ref_val_fmt = if trace.name == "Gear" { format!("{:.0}", ref_1) } else { format!("{:.1}", ref_1) };
+                                                ui.label(egui::RichText::new(ref_val_fmt).color(theme.reference_primary).size(8.5));
+                                            }
+
+                                            // Ref 2 (Secondary / Cyan)
+                                            if let Some(ref_2) = trace.secondary_ref_val {
+                                                ui.add_space(4.0);
+                                                draw_badge(ui, "2", theme.reference_secondary);
+                                                let ref_val_fmt = if trace.name == "Gear" { format!("{:.0}", ref_2) } else { format!("{:.1}", ref_2) };
+                                                ui.label(egui::RichText::new(ref_val_fmt).color(theme.reference_secondary).size(8.5));
+                                            }
+
+                                            // Delta
+                                            if trace.cyan_ref_val.is_some() || trace.secondary_ref_val.is_some() {
+                                                // TODO: Revise delta logic when a better solution is available for multiple references
+                                                let active_ref = trace.secondary_ref_val.unwrap_or_else(|| trace.cyan_ref_val.unwrap_or(0.0));
+                                                let delta = trace.raw_val - active_ref;
+                                                
+                                                ui.add_space(4.0);
+                                                draw_badge(ui, "Δ", theme.danger);
+                                                let sign = if delta > 0.0 { "+" } else { "" };
+                                                ui.label(egui::RichText::new(format!("{}{:.1}", sign, delta)).color(egui::Color32::WHITE).size(8.5));
+                                            }
+                                        });
+                                    }
+                                });
+                        });
+                }
             }
 
             // K. DOUBLE-CLICK HIGHLIGHT ZOOM
@@ -1296,5 +1214,4 @@ mod unit_tests {
 
         assert_eq!(note_context_range(&context), Some((14.75, 15.25)));
     }
-
 }

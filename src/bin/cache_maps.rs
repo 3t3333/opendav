@@ -1,9 +1,9 @@
+use indicatif::{ProgressBar, ProgressStyle};
+use inquire::{Select, Text};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::Path;
-use inquire::{Select, Text};
-use indicatif::{ProgressBar, ProgressStyle};
 
 // Bring in fetchers
 #[path = "../signals/mapbox.rs"]
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir_path_str = Text::new("Path to telemetry directory (.ibt files):")
         .with_default("C:\\Users\\bukar\\Documents\\iRacing\\telemetry")
         .prompt()?;
-    
+
     let dir_path = Path::new(&dir_path_str);
     if !dir_path.exists() || !dir_path.is_dir() {
         eprintln!("Error: Directory does not exist: {:?}", dir_path);
@@ -31,16 +31,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let providers = vec!["Google Satellite (No Watermark)", "Mapbox Satellite"];
     let provider = Select::new("Select Map Provider:", providers).prompt()?;
 
-    let resolutions = vec!["Normal (16x16 / 4096px - Instant)", "Ultra (32x32 / 8192px - 1.6GB Memory)"];
-    let res_choice = Select::new("Select Resolution (Ultra might freeze main app):", resolutions).prompt()?;
-    
+    let resolutions = vec![
+        "Normal (16x16 / 4096px - Instant)",
+        "Ultra (32x32 / 8192px - 1.6GB Memory)",
+    ];
+    let res_choice = Select::new(
+        "Select Resolution (Ultra might freeze main app):",
+        resolutions,
+    )
+    .prompt()?;
+
     let is_google = provider.contains("Google");
     let max_grid_size = if res_choice.contains("Ultra") { 32 } else { 16 };
-    
+
     let mut mapbox_api_key = String::new();
     if !is_google {
-        mapbox_api_key = Text::new("Enter Mapbox API Key:")
-            .prompt()?;
+        mapbox_api_key = Text::new("Enter Mapbox API Key:").prompt()?;
     }
 
     println!("Scanning directory for .ibt files...");
@@ -69,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for path in files_to_process {
         pb.set_message(format!("Reading {:?}", path.file_name().unwrap()));
-        
+
         match ibt_parser::parse_ibt_file(path.to_str().unwrap()) {
             Ok(session) => {
                 let track_id = session.track_id;
@@ -103,14 +109,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if min_lat != f64::MAX {
                         pb.set_message(format!("Fetching Track {}", track_id));
                         if is_google {
-                            let _ = google_maps::fetch_google_map_image(track_id, min_lon, min_lat, max_lon, max_lat, max_grid_size);
+                            let _ = google_maps::fetch_google_map_image(
+                                track_id,
+                                min_lon,
+                                min_lat,
+                                max_lon,
+                                max_lat,
+                                max_grid_size,
+                            );
                         } else {
-                            let _ = mapbox::fetch_mapbox_image(&mapbox_api_key, track_id, min_lon, min_lat, max_lon, max_lat, max_grid_size);
+                            let _ = mapbox::fetch_mapbox_image(
+                                &mapbox_api_key,
+                                track_id,
+                                min_lon,
+                                min_lat,
+                                max_lon,
+                                max_lat,
+                                max_grid_size,
+                            );
                         }
                         cached_tracks.insert(track_id);
                     }
                 }
-            },
+            }
             Err(_) => {} // Ignore parse errors in cache loop
         }
         pb.inc(1);

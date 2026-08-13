@@ -298,45 +298,69 @@ impl OpenDavApp {
                             ui.set_min_width(ui.available_width());
                             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                                 ui.heading(
-                                    egui::RichText::new("SimGit Cloud Sync (Supabase)")
+                                    egui::RichText::new("SimGit Cloud Sync Provider")
                                         .color(theme.text_primary)
                                         .size(21.0),
                                 );
                                 ui.add_space(4.0);
                                 ui.label(
                                     egui::RichText::new(
-                                        "Connect a team Supabase instance for collaborative telemetry packets, shared analysis notes, and role-based access control.",
+                                        "Choose whether to sync your collaborative telemetry repositories via OpenDav's free managed community cloud or connect your own self-hosted Supabase database (BYOD).",
                                     )
                                     .color(theme.text_secondary)
                                     .size(14.0),
                                 );
-                                ui.add_space(18.0);
+                                ui.add_space(14.0);
 
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Supabase Project URL").color(theme.text_primary).strong().size(15.0));
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let width = ui.available_width().min(360.0);
-                                        let res = ui.add_sized([width, 26.0], egui::TextEdit::singleline(&mut self.settings.supabase_url).hint_text("https://xxxx.supabase.co"));
-                                        if res.changed() { self.settings.save(); }
-                                    });
+                                    if ui.radio_value(
+                                        &mut self.settings.sync_provider,
+                                        crate::config::settings::SyncProvider::OpenDavCloud,
+                                        egui::RichText::new("☁️ OpenDav Free Cloud (Managed, 250MB / Repo Limit)").strong().size(15.0).color(theme.text_primary),
+                                    ).clicked() {
+                                        self.settings.save();
+                                    }
+                                    ui.add_space(16.0);
+                                    if ui.radio_value(
+                                        &mut self.settings.sync_provider,
+                                        crate::config::settings::SyncProvider::BringYourOwnDatabase,
+                                        egui::RichText::new("🛠️ Bring Your Own Database (BYOD)").strong().size(15.0).color(theme.text_primary),
+                                    ).clicked() {
+                                        self.settings.save();
+                                    }
                                 });
-                                ui.add_space(8.0);
 
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Supabase Anon Key").color(theme.text_primary).strong().size(15.0));
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let width = ui.available_width().min(360.0);
-                                        let res = ui.add_sized([width, 26.0], egui::TextEdit::singleline(&mut self.settings.supabase_anon_key).password(true).hint_text("Paste anon pub key"));
-                                        if res.changed() { self.settings.save(); }
+                                ui.add_space(16.0);
+
+                                if self.settings.sync_provider == crate::config::settings::SyncProvider::BringYourOwnDatabase {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("Supabase Project URL").color(theme.text_primary).strong().size(15.0));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            let width = ui.available_width().min(360.0);
+                                            let res = ui.add_sized([width, 26.0], egui::TextEdit::singleline(&mut self.settings.supabase_url).hint_text("https://xxxx.supabase.co"));
+                                            if res.changed() { self.settings.save(); }
+                                        });
                                     });
-                                });
+                                    ui.add_space(8.0);
+
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("Supabase Anon Key").color(theme.text_primary).strong().size(15.0));
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            let width = ui.available_width().min(360.0);
+                                            let res = ui.add_sized([width, 26.0], egui::TextEdit::singleline(&mut self.settings.supabase_anon_key).password(true).hint_text("Paste anon pub key"));
+                                            if res.changed() { self.settings.save(); }
+                                        });
+                                    });
+                                } else {
+                                    ui.label(egui::RichText::new("Using OpenDav's official multi-tenant database. Your telemetry projects remain isolated using Row-Level Security (RLS) to ensure only authorized teammates have access.").color(theme.text_secondary).italics());
+                                }
 
                                 ui.add_space(16.0);
                                 ui.separator();
                                 ui.add_space(12.0);
 
                                 ui.label(
-                                    egui::RichText::new("Database Setup & Initialization")
+                                    egui::RichText::new("Database Setup & Initialization (For BYOD / Self-Hosters)")
                                         .color(theme.text_primary)
                                         .strong()
                                         .size(15.0),
@@ -344,7 +368,7 @@ impl OpenDavApp {
                                 ui.add_space(4.0);
                                 ui.label(
                                     egui::RichText::new(
-                                        "Setting up your own server is free and only takes 2 minutes. Copy the SQL setup script and execute it inside your Supabase project's SQL Editor.\n\nIMPORTANT: You must go to your Supabase dashboard -> Authentication -> Providers -> Email, and disable \"Confirm email\" so that accounts can sign up smoothly without requiring email confirmation links.\n\nNote: The very first account created on your database automatically receives the Admin role (never pending), unlocking the inline Admin Dashboard in the SimGit Sync tab to approve and manage subsequent team accounts.",
+                                        "Setting up your own server is free and only takes 2 minutes. Copy the SQL setup script and execute it inside your Supabase project's SQL Editor.\n\nIMPORTANT: You must go to your Supabase dashboard -> Authentication -> Providers -> Email, and disable \"Confirm email\" so that accounts can sign up smoothly without requiring email confirmation links.\n\nNote: With SimGit v2.0.0 Multi-Tenant architecture, whoever creates a repository is automatically designated as its Admin with full power to invite teammates via email.",
                                     )
                                     .color(theme.text_secondary)
                                     .size(13.0),
@@ -355,7 +379,11 @@ impl OpenDavApp {
                                     if ui.add(egui::Button::new("📋 Copy Setup SQL Script").min_size(egui::vec2(160.0, 28.0))).clicked() {
                                         ui.ctx().copy_text(crate::simgit::data::backend::SUPABASE_INIT_SQL.to_string());
                                     }
-                                    ui.add_space(12.0);
+                                    ui.add_space(8.0);
+                                    if ui.add(egui::Button::new("⏱️ Copy Auto-Pruning SQL (250MB Limit)").min_size(egui::vec2(160.0, 28.0))).clicked() {
+                                        ui.ctx().copy_text(crate::simgit::data::backend::SUPABASE_PRUNE_SQL.to_string());
+                                    }
+                                    ui.add_space(8.0);
                                     if ui.add(
                                         egui::Button::new(
                                             egui::RichText::new("🗑️ Copy Database Deletion Script")

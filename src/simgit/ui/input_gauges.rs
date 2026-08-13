@@ -42,10 +42,8 @@ impl SteeringWheelSvgCache {
             &mut pixmap.as_mut(),
         );
 
-        let color_image = egui::ColorImage::from_rgba_unmultiplied(
-            [size as usize, size as usize],
-            pixmap.data(),
-        );
+        let color_image =
+            egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], pixmap.data());
 
         let handle = ctx.load_texture(
             "wheel_custom_svg",
@@ -64,6 +62,7 @@ pub fn draw_input_gauge_card(
     title: &str,
     subtitle: Option<&str>,
     sample: &LiveInputSample,
+    ref_sample: Option<&LiveInputSample>,
     wheel_cache: &mut SteeringWheelSvgCache,
     top_delta: Option<(f64, bool)>, // (delta, is_dark)
 ) {
@@ -107,11 +106,7 @@ pub fn draw_input_gauge_card(
                 );
                 if let Some(sub) = subtitle {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(sub)
-                                .small()
-                                .color(theme.text_tertiary),
-                        );
+                        ui.label(egui::RichText::new(sub).small().color(theme.text_tertiary));
                     });
                 }
             });
@@ -122,7 +117,9 @@ pub fn draw_input_gauge_card(
                 // Vertical Pedal Box: BRAKE (Left), THROTTLE (Right)
                 ui.vertical(|ui| {
                     ui.set_width(120.0);
-                    draw_vertical_pedal_box(ui, sample.brake, sample.throttle, theme);
+                    let ref_brk = ref_sample.map(|s| s.brake);
+                    let ref_thr = ref_sample.map(|s| s.throttle);
+                    draw_vertical_pedal_box(ui, sample.brake, ref_brk, sample.throttle, ref_thr, theme);
                 });
 
                 ui.add_space(10.0);
@@ -136,6 +133,7 @@ pub fn draw_input_gauge_card(
                         theme,
                         sample.steering_angle_rad as f32,
                         sample.steering_angle_deg,
+                        ref_sample.map(|s| (s.steering_angle_rad as f32, s.steering_angle_deg)),
                         wheel_cache,
                     );
                 });
@@ -144,12 +142,7 @@ pub fn draw_input_gauge_card(
 }
 
 /// Renders a vertical pedal box with Brake on the Left (Red) and Throttle on the Right (Green)
-fn draw_vertical_pedal_box(
-    ui: &mut egui::Ui,
-    brake_pct: f64,
-    throttle_pct: f64,
-    theme: &AppTheme,
-) {
+fn draw_vertical_pedal_box(ui: &mut egui::Ui, brake_pct: f64, ref_brake_pct: Option<f64>, throttle_pct: f64, ref_throttle_pct: Option<f64>, theme: &AppTheme) {
     let clamp_brk = brake_pct.clamp(0.0, 100.0);
     let clamp_thr = throttle_pct.clamp(0.0, 100.0);
 
@@ -186,10 +179,24 @@ fn draw_vertical_pedal_box(
     // Vertical Bar Rectangles
     ui.horizontal(|ui| {
         // BRAKE (LEFT)
-        draw_single_vertical_pedal(ui, clamp_brk, theme.brake, theme, Vec2::new(pedal_w, pedal_h));
+        draw_single_vertical_pedal(
+            ui,
+            clamp_brk,
+            ref_brake_pct,
+            theme.brake,
+            theme,
+            Vec2::new(pedal_w, pedal_h),
+        );
         ui.add_space(18.0);
         // THROTTLE (RIGHT)
-        draw_single_vertical_pedal(ui, clamp_thr, theme.throttle, theme, Vec2::new(pedal_w, pedal_h));
+        draw_single_vertical_pedal(
+            ui,
+            clamp_thr,
+            ref_throttle_pct,
+            theme.throttle,
+            theme,
+            Vec2::new(pedal_w, pedal_h),
+        );
     });
 
     ui.add_space(4.0);
@@ -224,6 +231,7 @@ fn draw_vertical_pedal_box(
 fn draw_single_vertical_pedal(
     ui: &mut egui::Ui,
     val_pct: f64,
+    ref_val_pct: Option<f64>,
     fill_color: Color32,
     theme: &AppTheme,
     size: Vec2,
@@ -232,16 +240,37 @@ fn draw_single_vertical_pedal(
 
     // Background track frame
     ui.painter().rect_filled(rect, 4.0, theme.surface_elevated);
-    ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0, theme.border_subtle), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, theme.border_subtle),
+        egui::StrokeKind::Inside,
+    );
+
+    // Reference fill (light blue, 85% opacity) drawn underneath the primary
+    if let Some(ref_val) = ref_val_pct {
+        let ref_fraction = (ref_val / 100.0).clamp(0.0, 1.0) as f32;
+        if ref_fraction > 0.005 {
+            let fill_height = rect.height() * ref_fraction;
+            let fill_rect =
+                Rect::from_min_max(Pos2::new(rect.min.x, rect.max.y - fill_height), rect.max);
+            let ref_color = Color32::from_rgb(100, 200, 255);
+            ui.painter().rect_filled(fill_rect, 4.0, ref_color.linear_multiply(0.85));
+            ui.painter().rect_stroke(
+                fill_rect,
+                4.0,
+                egui::Stroke::new(1.0, ref_color),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
 
     // Vertical fill from bottom upward
     let fill_fraction = (val_pct / 100.0).clamp(0.0, 1.0) as f32;
     if fill_fraction > 0.005 {
         let fill_height = rect.height() * fill_fraction;
-        let fill_rect = Rect::from_min_max(
-            Pos2::new(rect.min.x, rect.max.y - fill_height),
-            rect.max,
-        );
+        let fill_rect =
+            Rect::from_min_max(Pos2::new(rect.min.x, rect.max.y - fill_height), rect.max);
         ui.painter().rect_filled(fill_rect, 4.0, fill_color);
     }
 }
@@ -252,6 +281,7 @@ fn draw_vector_steering_wheel(
     theme: &AppTheme,
     angle_rad: f32,
     angle_deg: f64,
+    ref_angle: Option<(f32, f64)>,
     wheel_cache: &mut SteeringWheelSvgCache,
 ) {
     ui.label(
@@ -266,57 +296,73 @@ fn draw_vector_steering_wheel(
     let center = rect.center();
     let radius = rect.width() / 2.0 - 4.0;
 
-    // Draw rotated vector steering wheel
-    if let Some(tex) = wheel_cache.get_or_load(ui.ctx()) {
-        let rot = egui::emath::Rot2::from_angle(angle_rad);
-        let corners = [
-            center + rot * Vec2::new(-radius, -radius),
-            center + rot * Vec2::new(radius, -radius),
-            center + rot * Vec2::new(radius, radius),
-            center + rot * Vec2::new(-radius, radius),
-        ];
+    // Helper closure to draw the wheel mesh
+    let mut draw_wheel = |ui: &mut egui::Ui, ang_rad: f32, tint: Color32, is_ref: bool| {
+        if let Some(tex) = wheel_cache.get_or_load(ui.ctx()) {
+            let rot = egui::emath::Rot2::from_angle(ang_rad);
+            let corners = [
+                center + rot * Vec2::new(-radius, -radius),
+                center + rot * Vec2::new(radius, -radius),
+                center + rot * Vec2::new(radius, radius),
+                center + rot * Vec2::new(-radius, radius),
+            ];
 
-        let uvs = [
-            Pos2::new(0.0, 0.0),
-            Pos2::new(1.0, 0.0),
-            Pos2::new(1.0, 1.0),
-            Pos2::new(0.0, 1.0),
-        ];
+            let uvs = [
+                Pos2::new(0.0, 0.0),
+                Pos2::new(1.0, 0.0),
+                Pos2::new(1.0, 1.0),
+                Pos2::new(0.0, 1.0),
+            ];
 
-        let mut mesh = egui::Mesh::with_texture(tex.id());
-        for i in 0..4 {
-            mesh.vertices.push(egui::epaint::Vertex {
-                pos: corners[i],
-                uv: uvs[i],
-                color: Color32::WHITE,
-            });
+            let mut mesh = egui::Mesh::with_texture(tex.id());
+            for i in 0..4 {
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: corners[i],
+                    uv: uvs[i],
+                    color: tint,
+                });
+            }
+            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+
+            ui.painter().add(mesh);
+        } else {
+            // Fallback: Vector geometry matching wheel_custom.svg
+            let rim_color = if is_ref { tint } else { Color32::from_rgb(192, 192, 192) };
+            let marker_color = if is_ref { tint } else { Color32::from_rgb(255, 255, 0) };
+
+            ui.painter()
+                .circle_stroke(center, radius, egui::Stroke::new(if is_ref {3.0} else {5.0}, rim_color));
+
+            let rot = egui::emath::Rot2::from_angle(ang_rad);
+
+            // Horizontal spoke
+            let left_spoke = center + rot * Vec2::new(-radius + 3.0, 0.0);
+            let right_spoke = center + rot * Vec2::new(radius - 3.0, 0.0);
+            ui.painter()
+                .line_segment([left_spoke, right_spoke], egui::Stroke::new(if is_ref {3.0} else {5.0}, rim_color));
+
+            // Vertical drop spoke
+            let bottom_spoke = center + rot * Vec2::new(0.0, radius - 3.0);
+            ui.painter()
+                .line_segment([center, bottom_spoke], egui::Stroke::new(if is_ref {3.0} else {5.0}, rim_color));
+
+            // Center Marker at Top
+            let marker_start = center + rot * Vec2::new(0.0, -radius - 1.0);
+            let marker_end = center + rot * Vec2::new(0.0, -radius + 7.0);
+            ui.painter().line_segment(
+                [marker_start, marker_end],
+                egui::Stroke::new(if is_ref {3.0} else {5.0}, marker_color),
+            );
         }
-        mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    };
 
-        ui.painter().add(mesh);
-    } else {
-        // Fallback: Vector geometry matching wheel_custom.svg
-        let rim_color = Color32::from_rgb(192, 192, 192);
-        let marker_color = Color32::from_rgb(255, 255, 0);
-
-        ui.painter().circle_stroke(center, radius, egui::Stroke::new(5.0, rim_color));
-
-        let rot = egui::emath::Rot2::from_angle(angle_rad);
-
-        // Horizontal spoke
-        let left_spoke = center + rot * Vec2::new(-radius + 3.0, 0.0);
-        let right_spoke = center + rot * Vec2::new(radius - 3.0, 0.0);
-        ui.painter().line_segment([left_spoke, right_spoke], egui::Stroke::new(5.0, rim_color));
-
-        // Vertical drop spoke
-        let bottom_spoke = center + rot * Vec2::new(0.0, radius - 3.0);
-        ui.painter().line_segment([center, bottom_spoke], egui::Stroke::new(5.0, rim_color));
-
-        // Center Yellow Marker at Top
-        let marker_start = center + rot * Vec2::new(0.0, -radius - 1.0);
-        let marker_end = center + rot * Vec2::new(0.0, -radius + 7.0);
-        ui.painter().line_segment([marker_start, marker_end], egui::Stroke::new(5.0, marker_color));
+    // Draw reference wheel underneath first
+    if let Some((ref_rad, _ref_deg)) = ref_angle {
+        draw_wheel(ui, ref_rad, Color32::from_rgb(100, 200, 255).linear_multiply(0.85), true);
     }
+
+    // Draw primary wheel on top
+    draw_wheel(ui, angle_rad, Color32::WHITE, false);
 
     ui.add_space(4.0);
     let dir_str = if angle_deg > 0.5 {
