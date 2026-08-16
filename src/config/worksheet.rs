@@ -22,7 +22,7 @@ pub enum WorksheetTab {
     CompressionRates,  // 12. Compression Rates
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum CacheSelector {
     Speed,
     RPM,
@@ -55,6 +55,39 @@ pub enum CacheSelector {
     LrShockDeflection,
     RrShockDeflection,
 }
+
+pub const ALL_CACHE_SELECTORS: [CacheSelector; 30] = [
+    CacheSelector::Speed,
+    CacheSelector::RPM,
+    CacheSelector::Throttle,
+    CacheSelector::Brake,
+    CacheSelector::Steering,
+    CacheSelector::FrontHeight,
+    CacheSelector::RearHeight,
+    CacheSelector::Rake,
+    CacheSelector::LatG,
+    CacheSelector::LongG,
+    CacheSelector::Gear,
+    CacheSelector::Clutch,
+    CacheSelector::DistanceDelta,
+    CacheSelector::TimeDelta,
+    CacheSelector::LfTempOuter,
+    CacheSelector::LfTempCenter,
+    CacheSelector::LfTempInner,
+    CacheSelector::RfTempInner,
+    CacheSelector::RfTempCenter,
+    CacheSelector::RfTempOuter,
+    CacheSelector::LrTempOuter,
+    CacheSelector::LrTempCenter,
+    CacheSelector::LrTempInner,
+    CacheSelector::RrTempInner,
+    CacheSelector::RrTempCenter,
+    CacheSelector::RrTempOuter,
+    CacheSelector::LfShockDeflection,
+    CacheSelector::RfShockDeflection,
+    CacheSelector::LrShockDeflection,
+    CacheSelector::RrShockDeflection,
+];
 
 pub const TYRE_CHANNEL_GROUPS: [[CacheSelector; 3]; 4] = [
     [
@@ -157,28 +190,38 @@ impl CacheSelector {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LaneScaling {
     Mono,
     Poly,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TraceSpec {
-    pub name: &'static str,
+    pub name: String,
     pub cache: CacheSelector,
+    pub custom_channel: Option<String>,
     pub color: egui::Color32,
     pub width: f32,
-    pub unit: &'static str,
+    pub unit: String,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LaneSpec {
-    pub title: &'static str,
+    pub title: String,
     pub y_min: f64,
     pub y_max: f64,
     pub scaling: LaneScaling,
     pub traces: Vec<TraceSpec>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub enum WorksheetClipboard {
+    Lanes(Vec<LaneSpec>),
+    Traces(Vec<TraceSpec>),
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorksheetConfig {
     pub lanes: Vec<LaneSpec>,
 }
@@ -188,80 +231,80 @@ impl WorksheetConfig {
         Self {
             lanes: vec![
                 LaneSpec {
-                    title: "Ground Speed",
+                    title: "Ground Speed".to_string(),
                     y_min: 76.0,
                     y_max: 98.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![TraceSpec {
-                        name: "Speed",
-                        cache: CacheSelector::Speed,
+                        name: "Speed".to_string(),
+                        cache: CacheSelector::Speed, custom_channel: None,
                         color: theme.speed,
                         width: 2.2,
-                        unit: " km/h",
+                        unit: " km/h".to_string(),
                     }],
                 },
                 LaneSpec {
-                    title: "Engine RPM",
+                    title: "Engine RPM".to_string(),
                     y_min: 52.0,
                     y_max: 72.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![
                         TraceSpec {
-                            name: "RPM",
-                            cache: CacheSelector::RPM,
+                            name: "RPM".to_string(),
+                            cache: CacheSelector::RPM, custom_channel: None,
                             color: theme.rpm,
                             width: 2.2,
-                            unit: "",
+                            unit: "".to_string(),
                         },
                         TraceSpec {
-                            name: "Gear",
-                            cache: CacheSelector::Gear,
+                            name: "Gear".to_string(),
+                            cache: CacheSelector::Gear, custom_channel: None,
                             color: theme.gear,
                             width: 1.8,
-                            unit: "",
+                            unit: "".to_string(),
                         },
                     ],
                 },
                 LaneSpec {
-                    title: "Pedal Inputs",
+                    title: "Pedal Inputs".to_string(),
                     y_min: 28.0,
                     y_max: 48.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![
                         TraceSpec {
-                            name: "Throttle",
-                            cache: CacheSelector::Throttle,
+                            name: "Throttle".to_string(),
+                            cache: CacheSelector::Throttle, custom_channel: None,
                             color: theme.throttle,
                             width: 2.2,
-                            unit: "%",
+                            unit: "%".to_string(),
                         },
                         TraceSpec {
-                            name: "Brake",
-                            cache: CacheSelector::Brake,
+                            name: "Brake".to_string(),
+                            cache: CacheSelector::Brake, custom_channel: None,
                             color: theme.brake,
                             width: 2.2,
-                            unit: "%",
+                            unit: "%".to_string(),
                         },
                         TraceSpec {
-                            name: "ClutchRaw",
-                            cache: CacheSelector::Clutch,
+                            name: "ClutchRaw".to_string(),
+                            cache: CacheSelector::Clutch, custom_channel: None,
                             color: theme.clutch,
                             width: 2.2,
-                            unit: "%",
+                            unit: "%".to_string(),
                         },
                     ],
                 },
                 LaneSpec {
-                    title: "Steering",
+                    title: "Steering".to_string(),
                     y_min: 10.0,
                     y_max: 24.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![TraceSpec {
-                        name: "Steering Angle",
-                        cache: CacheSelector::Steering,
+                        name: "Steering Angle".to_string(),
+                        cache: CacheSelector::Steering, custom_channel: None,
                         color: theme.steering,
                         width: 2.2,
-                        unit: "°",
+                        unit: "°".to_string(),
                     }],
                 },
             ],
@@ -272,66 +315,66 @@ impl WorksheetConfig {
         Self {
             lanes: vec![
                 LaneSpec {
-                    title: "Ground Speed",
+                    title: "Ground Speed".to_string(),
                     y_min: 76.0,
                     y_max: 98.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![TraceSpec {
-                        name: "Speed",
-                        cache: CacheSelector::Speed,
+                        name: "Speed".to_string(),
+                        cache: CacheSelector::Speed, custom_channel: None,
                         color: theme.speed,
                         width: 2.2,
-                        unit: " km/h",
+                        unit: " km/h".to_string(),
                     }],
                 },
                 LaneSpec {
-                    title: "Ride Heights & Rake",
+                    title: "Ride Heights & Rake".to_string(),
                     y_min: 45.0,
                     y_max: 75.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![
                         TraceSpec {
-                            name: "Front Height",
-                            cache: CacheSelector::FrontHeight,
+                            name: "Front Height".to_string(),
+                            cache: CacheSelector::FrontHeight, custom_channel: None,
                             color: theme.throttle,
                             width: 2.2,
-                            unit: " mm",
+                            unit: " mm".to_string(),
                         },
                         TraceSpec {
-                            name: "Rear Height",
-                            cache: CacheSelector::RearHeight,
+                            name: "Rear Height".to_string(),
+                            cache: CacheSelector::RearHeight, custom_channel: None,
                             color: theme.rpm,
                             width: 2.2,
-                            unit: " mm",
+                            unit: " mm".to_string(),
                         },
                         TraceSpec {
-                            name: "Dynamic Rake",
-                            cache: CacheSelector::Rake,
+                            name: "Dynamic Rake".to_string(),
+                            cache: CacheSelector::Rake, custom_channel: None,
                             color: theme.steering,
                             width: 2.2,
-                            unit: " mm",
+                            unit: " mm".to_string(),
                         },
                     ],
                 },
                 LaneSpec {
-                    title: "Accelerations",
+                    title: "Accelerations".to_string(),
                     y_min: 10.0,
                     y_max: 40.0,
                     scaling: LaneScaling::Mono,
                     traces: vec![
                         TraceSpec {
-                            name: "Lateral G",
-                            cache: CacheSelector::LatG,
+                            name: "Lateral G".to_string(),
+                            cache: CacheSelector::LatG, custom_channel: None,
                             color: theme.brake,
                             width: 2.2,
-                            unit: " G",
+                            unit: " G".to_string(),
                         },
                         TraceSpec {
-                            name: "Longitudinal G",
-                            cache: CacheSelector::LongG,
+                            name: "Longitudinal G".to_string(),
+                            cache: CacheSelector::LongG, custom_channel: None,
                             color: theme.clutch,
                             width: 2.2,
-                            unit: " G",
+                            unit: " G".to_string(),
                         },
                     ],
                 },
@@ -340,13 +383,13 @@ impl WorksheetConfig {
     }
 
     pub fn tyre(theme: AppTheme) -> Self {
-        let lane = |title,
+        let lane = |title: &str,
                     range: (f64, f64),
                     names: [&'static str; 3],
                     selectors,
                     colors: [egui::Color32; 3]| {
             LaneSpec {
-                title,
+                title: title.to_string(),
                 y_min: range.0,
                 y_max: range.1,
                 scaling: LaneScaling::Mono,
@@ -355,11 +398,11 @@ impl WorksheetConfig {
                     .zip(selectors)
                     .zip(colors)
                     .map(|((position, cache), color)| TraceSpec {
-                        name: position,
-                        cache,
+                        name: position.to_string(),
+                        cache: cache, custom_channel: None,
                         color,
                         width: 2.0,
-                        unit: " °C",
+                        unit: " °C".to_string(),
                     })
                     .collect(),
             }
@@ -428,16 +471,16 @@ impl WorksheetConfig {
                 .zip(STACKED_LANE_RANGES)
                 .zip(theme.shock_corners)
                 .map(|(((title, name, cache), range), color)| LaneSpec {
-                    title,
+                    title: title.to_string(),
                     y_min: range.0,
                     y_max: range.1,
                     scaling: LaneScaling::Mono,
                     traces: vec![TraceSpec {
-                        name,
-                        cache,
+                        name: name.to_string(),
+                        cache, custom_channel: None,
                         color,
                         width: 2.2,
-                        unit: " mm",
+                        unit: " mm".to_string(),
                     }],
                 })
                 .collect(),

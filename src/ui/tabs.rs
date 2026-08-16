@@ -1,10 +1,32 @@
 use crate::config::theme::AppTheme;
-use crate::config::worksheet::{WorksheetConfig, WorksheetTab};
+use crate::config::worksheet::WorksheetConfig;
 use crate::signals::processing::{
     format_lap_time, format_sector_time, get_fastest_lap, get_lap_time_at_distance,
 };
 use crate::ActivePage;
 use crate::OpenDavApp;
+
+pub struct TreeBehavior<'a> {
+    pub app: &'a mut OpenDavApp,
+    pub is_tab_switch: bool,
+}
+
+impl<'a> egui_tiles::Behavior<crate::config::workbook::Pane> for TreeBehavior<'a> {
+    fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: egui_tiles::TileId, pane: &mut crate::config::workbook::Pane) -> egui_tiles::UiResponse {
+        match pane {
+            crate::config::workbook::Pane::TimeSeries { id, config } => {
+                self.app.draw_motec_plot(ui, id, config, self.is_tab_switch);
+            }
+        }
+        egui_tiles::UiResponse::None
+    }
+    
+    fn tab_title_for_pane(&mut self, pane: &crate::config::workbook::Pane) -> egui::WidgetText {
+        match pane {
+            crate::config::workbook::Pane::TimeSeries { .. } => "Time Series".into(),
+        }
+    }
+}
 
 fn report_time_cell(
     ui: &mut egui::Ui,
@@ -496,39 +518,92 @@ impl OpenDavApp {
             }
         }
 
-        // 1. HORIZONTAL MOTEC WORKSHEET TABS AT THE TOP!
-        ui.horizontal_wrapped(|ui| {
-            let tab_style = ui.style_mut();
-            tab_style.spacing.button_padding = egui::vec2(12.0, 8.0); // Perfect, professional tab sizing
+        // 1. WORKBOOK COMBOBOX & WORKSHEET TABS
+        ui.horizontal(|ui| {
+            let mut selected_wb = self.active_workbook_idx;
+            let wb_name = self.workbooks.get(selected_wb).map(|w| w.name.clone()).unwrap_or_default();
+            egui::ComboBox::from_id_salt("workbook_selector")
+                .selected_text(wb_name)
+                .show_ui(ui, |ui| {
+                    for (i, wb) in self.workbooks.iter().enumerate() {
+                        ui.selectable_value(&mut selected_wb, i, &wb.name);
+                    }
+                });
+            if selected_wb != self.active_workbook_idx {
+                self.active_workbook_idx = selected_wb;
+                self.active_worksheet_idx = 0;
+            }
 
-            ui.selectable_value(
-                &mut self.active_worksheet,
-                WorksheetTab::Driver,
-                "1. Driver",
-            );
-            ui.selectable_value(
-                &mut self.active_worksheet,
-                WorksheetTab::Vehicle,
-                "2. Vehicle",
-            );
-            ui.selectable_value(&mut self.active_worksheet, WorksheetTab::Tyre, "3. Tyre");
-            ui.selectable_value(
-                &mut self.active_worksheet,
-                WorksheetTab::Shocks,
-                "4. Shocks",
-            );
+            ui.menu_button("⚙", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Rename:");
+                    ui.text_edit_singleline(&mut self.workbooks[self.active_workbook_idx].name);
+                });
+                if ui.button("Delete Workbook").clicked() {
+                    if self.workbooks.len() > 1 {
+                        self.workbooks.remove(self.active_workbook_idx);
+                        self.active_workbook_idx = 0;
+                        self.active_worksheet_idx = 0;
+                        ui.close_menu();
+                    }
+                }
+            });
+            if ui.button("+ WB").clicked() {
+                self.workbooks.push(crate::config::workbook::Workbook {
+                    name: format!("Workbook {}", self.workbooks.len() + 1),
+                    worksheets: vec![crate::config::workbook::Worksheet {
+                        name: "Worksheet 1".to_string(),
+                        tree: egui_tiles::Tree::empty("new_ws"),
+                    }],
+                });
+                self.active_workbook_idx = self.workbooks.len() - 1;
+                self.active_worksheet_idx = 0;
+            }
+
+            ui.separator();
+
+            let tab_style = ui.style_mut();
+            tab_style.spacing.button_padding = egui::vec2(12.0, 8.0);
+            
+            let wb = &mut self.workbooks[self.active_workbook_idx];
+            let mut ws_to_delete = None;
+            for (i, ws) in wb.worksheets.iter_mut().enumerate() {
+                let response = ui.selectable_label(self.active_worksheet_idx == i, &ws.name);
+                if response.clicked() {
+                    self.active_worksheet_idx = i;
+                }
+                response.context_menu(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Rename:");
+                        ui.text_edit_singleline(&mut ws.name);
+                    });
+                    if ui.button("Delete Worksheet").clicked() {
+                        ws_to_delete = Some(i);
+                        ui.close_menu();
+                    }
+                });
+            }
+            if let Some(i) = ws_to_delete {
+                if wb.worksheets.len() > 1 {
+                    wb.worksheets.remove(i);
+                    if self.active_worksheet_idx >= wb.worksheets.len() {
+                        self.active_worksheet_idx = wb.worksheets.len() - 1;
+                    }
+                }
+            }
+            if ui.button("+").clicked() {
+                wb.worksheets.push(crate::config::workbook::Worksheet {
+                    name: format!("Worksheet {}", wb.worksheets.len() + 1),
+                    tree: egui_tiles::Tree::empty("new_ws"),
+                });
+            }
         });
 
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(10.0);
 
-        // Calculate if tab, page, or layout was switched this frame to trigger shared viewport boundary syncing!
         let mut is_tab_switch = false;
-        if Some(self.active_worksheet) != self.previous_worksheet {
-            is_tab_switch = true;
-            self.previous_worksheet = Some(self.active_worksheet);
-        }
         if Some(self.active_page) != self.previous_page {
             is_tab_switch = true;
             self.previous_page = Some(self.active_page);
@@ -537,45 +612,303 @@ impl OpenDavApp {
             is_tab_switch = true;
             self.previous_show_graphs_track_map = Some(self.show_graphs_track_map);
         }
+        if Some(self.active_worksheet_idx) != self.previous_worksheet_idx {
+            is_tab_switch = true;
+            self.previous_worksheet_idx = Some(self.active_worksheet_idx);
+        }
 
-        // 2. ACTIVE WORKSHEET PLOTTING AREA (SINGLE INTEGRATED HIGH-PERFORMANCE PLOT ENVIRONMENT!)
-        let theme = AppTheme::for_mode(self.settings.dark_mode);
-        let config = match self.active_worksheet {
-            WorksheetTab::Driver => Some(WorksheetConfig::driver(theme)),
-            WorksheetTab::Vehicle => Some(WorksheetConfig::vehicle(theme)),
-            WorksheetTab::Tyre => Some(WorksheetConfig::tyre(theme)),
-            WorksheetTab::Shocks => Some(WorksheetConfig::shocks(theme)),
-            _ => None,
+        let mut behavior = TreeBehavior {
+            app: self,
+            is_tab_switch,
         };
+        
+        let active_wb_idx = behavior.app.active_workbook_idx;
+        let active_ws_idx = behavior.app.active_worksheet_idx;
+        let mut tree = behavior.app.workbooks[active_wb_idx].worksheets[active_ws_idx].tree.clone();
 
-        ui.allocate_ui(ui.available_size(), |ui| {
-            if let Some(cfg) = &config {
-                let canvas_id = match self.active_worksheet {
-                    WorksheetTab::Driver => "basic_worksheet_canvas",
-                    WorksheetTab::Vehicle => "basic_vehicle_worksheet_canvas",
-                    WorksheetTab::Tyre => "tyre_worksheet_canvas",
-                    WorksheetTab::Shocks => "shocks_worksheet_canvas",
-                    _ => "custom_worksheet_canvas",
-                };
-                self.draw_motec_plot(ui, canvas_id, cfg, is_tab_switch);
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("Worksheet Active")
-                                .heading()
-                                .color(theme.accent_text),
-                        );
-                        ui.label(
-                            egui::RichText::new(
-                                "Additional worksheet rendering is planned for a future update.",
-                            )
-                            .color(theme.text_secondary),
-                        );
-                    });
-                });
-            }
+        let response = ui.allocate_response(ui.available_size(), egui::Sense::click());
+        response.context_menu(|ui| {
+            ui.menu_button("Add", |ui| {
+                if ui.button("Time Series Graph").clicked() {
+                    let pane = crate::config::workbook::Pane::TimeSeries { 
+                        id: format!("ts_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros()),
+                        config: crate::config::worksheet::WorksheetConfig { lanes: vec![] },
+                    };
+                    let tile_id = tree.tiles.insert_pane(pane);
+                    if let Some(root) = tree.root {
+                        if let Some(egui_tiles::Tile::Container(egui_tiles::Container::Linear(lin))) = tree.tiles.get_mut(root) {
+                            lin.add_child(tile_id);
+                        } else {
+                            let linear = egui_tiles::Linear::new(egui_tiles::LinearDir::Horizontal, vec![root, tile_id]);
+                            let new_root = tree.tiles.insert_container(egui_tiles::Container::Linear(linear));
+                            tree.root = Some(new_root);
+                        }
+                    } else {
+                        tree.root = Some(tile_id);
+                    }
+                    ui.close_menu();
+                }
+            });
         });
+
+        // We render the tree in the same rect we allocated above
+        let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(response.rect).layout(*ui.layout()));
+        tree.ui(&mut behavior, &mut child_ui);
+
+        if let Some(pane_id) = behavior.app.pane_to_close.take() {
+            let mut tile_to_remove = None;
+            for (tile_id, tile) in tree.tiles.iter() {
+                if let egui_tiles::Tile::Pane(crate::config::workbook::Pane::TimeSeries { id, .. }) = tile {
+                    if id == &pane_id {
+                        tile_to_remove = Some(*tile_id);
+                        break;
+                    }
+                }
+            }
+            if let Some(tile_id) = tile_to_remove {
+                tree.tiles.remove(tile_id);
+            }
+        }
+
+        let mut close_properties = false;
+        if let Some(plot_id) = behavior.app.properties_window_open.clone() {
+            let mut is_open = true;
+            let mut window_drawn = false;
+            
+            for (_tile_id, tile) in tree.tiles.iter_mut() {
+                if let egui_tiles::Tile::Pane(crate::config::workbook::Pane::TimeSeries { id, config }) = tile {
+                    if id == &plot_id {
+                        window_drawn = true;
+                        egui::Window::new(format!("Properties: {}", plot_id))
+                            .open(&mut is_open)
+                            .show(ui.ctx(), |ui| {
+                                let select_mode_id = ui.id().with("select_mode");
+                                let selected_lanes_id = ui.id().with("selected_lanes");
+                                let selected_traces_id = ui.id().with("selected_traces");
+
+                                let mut is_select_mode = ui.data_mut(|d| d.get_temp::<bool>(select_mode_id).unwrap_or(false));
+                                let mut selected_lanes = ui.data_mut(|d| d.get_temp::<std::collections::HashSet<usize>>(selected_lanes_id).unwrap_or_default());
+                                let mut selected_traces = ui.data_mut(|d| d.get_temp::<std::collections::HashSet<(usize, usize)>>(selected_traces_id).unwrap_or_default());
+                                let mut do_copy = false;
+                                let mut do_cut = false;
+
+                                ui.horizontal(|ui| {
+                                    if ui.toggle_value(&mut is_select_mode, "Select Mode").changed() {
+                                        if !is_select_mode {
+                                            selected_lanes.clear();
+                                            selected_traces.clear();
+                                        }
+                                    }
+                                    if is_select_mode {
+                                        if ui.button("Copy").clicked() { do_copy = true; }
+                                        if ui.button("Cut").clicked() { do_cut = true; }
+                                    }
+                                });
+                                ui.separator();
+
+                                let mut needs_redistribute = false;
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    let mut i = 0;
+                                    while i < config.lanes.len() {
+                                        ui.horizontal(|ui| {
+                                            if is_select_mode {
+                                                let mut selected = selected_lanes.contains(&i);
+                                                if ui.checkbox(&mut selected, "").changed() {
+                                                    if selected { selected_lanes.insert(i); } else { selected_lanes.remove(&i); }
+                                                }
+                                            }
+                                            ui.text_edit_singleline(&mut config.lanes[i].title);
+                                            if ui.button("↑").clicked() && i > 0 {
+                                                config.lanes.swap(i, i - 1);
+                                                needs_redistribute = true;
+                                            }
+                                            if ui.button("↓").clicked() && i + 1 < config.lanes.len() {
+                                                config.lanes.swap(i, i + 1);
+                                                needs_redistribute = true;
+                                            }
+                                            if ui.button("Remove Group").clicked() {
+                                                config.lanes.remove(i);
+                                                needs_redistribute = true;
+                                            } else {
+                                                ui.label(format!("({} traces)", config.lanes[i].traces.len()));
+                                            }
+                                        });
+                                        if i < config.lanes.len() {
+                                            ui.indent(format!("lane_{}", i), |ui| {
+                                                let mut j = 0;
+                                                while j < config.lanes[i].traces.len() {
+                                                    ui.horizontal(|ui| {
+                                                        if is_select_mode {
+                                                            let mut selected = selected_traces.contains(&(i, j));
+                                                            if ui.checkbox(&mut selected, "").changed() {
+                                                                if selected { selected_traces.insert((i, j)); } else { selected_traces.remove(&(i, j)); }
+                                                            }
+                                                        }
+                                                        ui.text_edit_singleline(&mut config.lanes[i].traces[j].name);
+                                                        ui.color_edit_button_srgba(&mut config.lanes[i].traces[j].color);
+                                                        if ui.button("Remove").clicked() {
+                                                            config.lanes[i].traces.remove(j);
+                                                        } else {
+                                                            j += 1;
+                                                        }
+                                                    });
+                                                }
+                                                
+                                                // We use a popup_below_widget instead of menu_button to prevent auto-closing!
+                                                let btn_id = ui.id().with(format!("add_channel_popup_{}", i));
+                                                let add_btn = ui.button("+ Add Channel");
+                                                if add_btn.clicked() {
+                                                    ui.memory_mut(|mem| mem.toggle_popup(btn_id));
+                                                }
+                                                egui::popup_below_widget(ui, btn_id, &add_btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui: &mut egui::Ui| {
+                                                    ui.set_min_width(350.0);
+                                                    let mut search_query = ui.data_mut(|d| d.get_temp::<String>(ui.id().with("search")).unwrap_or_default());
+                                                    ui.horizontal(|ui| {
+                                                        ui.label("🔍");
+                                                        let response = ui.text_edit_singleline(&mut search_query);
+                                                        response.request_focus();
+                                                    });
+                                                    ui.data_mut(|d| d.insert_temp(ui.id().with("search"), search_query.clone()));
+                                                    ui.separator();
+                                                    egui::ScrollArea::vertical().max_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
+                                                        let channel_names: Vec<String> = if behavior.app.session_loaded && !behavior.app.sessions.is_empty() {
+                                                            let p_idx = behavior.app.primary_session_idx;
+                                                            let mut names: Vec<String> = behavior.app.sessions[p_idx]
+                                                                .session
+                                                                .dataframe
+                                                                .get_column_names()
+                                                                .into_iter()
+                                                                .map(|s| s.to_string())
+                                                                .collect();
+                                                            names.sort_by_key(|n| n.to_lowercase());
+                                                            names
+                                                        } else {
+                                                            vec![]
+                                                        };
+                                                        let query = search_query.to_lowercase();
+                                                        for name in channel_names {
+                                                            if !query.is_empty() && !name.to_lowercase().contains(&query) {
+                                                                continue;
+                                                            }
+                                                            if ui.button(name.clone()).clicked() {
+                                                                config.lanes[i].traces.push(crate::config::worksheet::TraceSpec {
+                                                                    name: name.clone(),
+                                                                    cache: crate::config::worksheet::CacheSelector::Speed, // Fallback
+                                                                    custom_channel: Some(name.clone()),
+                                                                    color: egui::Color32::WHITE,
+                                                                    width: 2.2,
+                                                                    unit: "".to_string(),
+                                                                });
+                                                                ui.memory_mut(|mem| mem.close_popup(btn_id));
+                                                            }
+                                                        }
+                                                    });
+                                                });
+                                                
+                                                if let Some(crate::config::worksheet::WorksheetClipboard::Traces(traces)) = &behavior.app.worksheet_clipboard {
+                                                    if ui.button("Paste Traces").clicked() {
+                                                        config.lanes[i].traces.extend(traces.clone());
+                                                    }
+                                                }
+                                            });
+                                            i += 1;
+                                        }
+                                    }
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.button("+ Add Group").clicked() {
+                                            config.lanes.push(crate::config::worksheet::LaneSpec {
+                                                title: "New Lane".to_string(),
+                                                y_min: 0.0,
+                                                y_max: 100.0,
+                                                scaling: crate::config::worksheet::LaneScaling::Mono,
+                                                traces: vec![],
+                                            });
+                                            needs_redistribute = true;
+                                        }
+                                        if let Some(crate::config::worksheet::WorksheetClipboard::Lanes(lanes)) = &behavior.app.worksheet_clipboard {
+                                            if ui.button("Paste Groups").clicked() {
+                                                config.lanes.extend(lanes.clone());
+                                                needs_redistribute = true;
+                                            }
+                                        }
+                                    });
+                                    
+                                    if needs_redistribute && !config.lanes.is_empty() {
+                                        let n = config.lanes.len();
+                                        let gap = 4.0;
+                                        let total_gaps = (n - 1) as f64 * gap;
+                                        let available_height = 86.0; // 98.0 (top margin) - 12.0 (bottom ticker boundary)
+                                        let height_per_lane = (available_height - total_gaps) / n as f64;
+                                        for (idx, lane) in config.lanes.iter_mut().enumerate() {
+                                            let reverse_idx = n - 1 - idx;
+                                            lane.y_min = 12.0 + reverse_idx as f64 * (height_per_lane + gap);
+                                            lane.y_max = lane.y_min + height_per_lane;
+                                        }
+                                    }
+                                });
+
+                                if do_copy || do_cut {
+                                    if !selected_lanes.is_empty() {
+                                        let mut lanes = Vec::new();
+                                        let mut i_to_remove = Vec::new();
+                                        for &idx in &selected_lanes {
+                                            if idx < config.lanes.len() {
+                                                lanes.push(config.lanes[idx].clone());
+                                                i_to_remove.push(idx);
+                                            }
+                                        }
+                                        behavior.app.worksheet_clipboard = Some(crate::config::worksheet::WorksheetClipboard::Lanes(lanes));
+                                        if do_cut {
+                                            i_to_remove.sort_by(|a, b| b.cmp(a));
+                                            for idx in i_to_remove {
+                                                config.lanes.remove(idx);
+                                            }
+                                            needs_redistribute = true;
+                                        }
+                                    } else if !selected_traces.is_empty() {
+                                        let mut traces = Vec::new();
+                                        let mut traces_to_remove = Vec::new();
+                                        for &(i, j) in &selected_traces {
+                                            if i < config.lanes.len() && j < config.lanes[i].traces.len() {
+                                                traces.push(config.lanes[i].traces[j].clone());
+                                                traces_to_remove.push((i, j));
+                                            }
+                                        }
+                                        behavior.app.worksheet_clipboard = Some(crate::config::worksheet::WorksheetClipboard::Traces(traces));
+                                        if do_cut {
+                                            traces_to_remove.sort_by(|a, b| {
+                                                if a.0 != b.0 { b.0.cmp(&a.0) } else { b.1.cmp(&a.1) }
+                                            });
+                                            for (i, j) in traces_to_remove {
+                                                if i < config.lanes.len() && j < config.lanes[i].traces.len() {
+                                                    config.lanes[i].traces.remove(j);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    is_select_mode = false;
+                                    selected_lanes.clear();
+                                    selected_traces.clear();
+                                }
+
+                                ui.data_mut(|d| d.insert_temp(select_mode_id, is_select_mode));
+                                ui.data_mut(|d| d.insert_temp(selected_lanes_id, selected_lanes));
+                                ui.data_mut(|d| d.insert_temp(selected_traces_id, selected_traces));
+                            });
+                        break;
+                    }
+                }
+            }
+            if !is_open || !window_drawn {
+                close_properties = true;
+            }
+        }
+        if close_properties {
+            behavior.app.properties_window_open = None;
+        }
+        
+        behavior.app.workbooks[active_wb_idx].worksheets[active_ws_idx].tree = tree;
     }
 
     pub fn draw_reports_page(&mut self, ui: &mut egui::Ui, is_dark: bool) {

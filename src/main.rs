@@ -89,6 +89,7 @@ pub struct LoadedSession {
     pub time_delta_pts_cache: Vec<[f64; 2]>,
     pub worksheet_channel_pts_cache:
         std::collections::HashMap<crate::config::worksheet::CacheSelector, Vec<[f64; 2]>>,
+    pub custom_channel_pts_cache: std::collections::HashMap<String, (f64, f64, Vec<[f64; 2]>)>,
 
     // Precomputed Lap boundary start/end time markers (relative to stint start in seconds)
     pub lap_ranges: Vec<(i32, f64, f64)>,
@@ -115,7 +116,13 @@ pub struct LoadedSession {
 pub struct OpenDavApp {
     pub app_state: AppState,
     pub active_page: ActivePage,
-    pub active_worksheet: WorksheetTab,
+    pub workbooks: Vec<crate::config::workbook::Workbook>,
+    pub active_workbook_idx: usize,
+    pub active_worksheet_idx: usize,
+    pub previous_worksheet_idx: Option<usize>,
+    pub properties_window_open: Option<String>,
+    pub worksheet_clipboard: Option<crate::config::worksheet::WorksheetClipboard>,
+    pub pane_to_close: Option<String>,
     pub active_reports_tab: ReportsTab,
     pub session_loaded: bool,
     pub active_file: Option<String>,
@@ -149,9 +156,6 @@ pub struct OpenDavApp {
 
     // Shared horizontal view bounds to perfectly synchronize Zoom/Pan/Scroll across different tabs!
     pub visible_x_range: Option<(f64, f64)>,
-
-    // Tracks worksheet changes to execute tab-sync bounds on switch frames cleanly!
-    pub previous_worksheet: Option<WorksheetTab>,
 
     pub show_graphs_track_map: bool,
     pub previous_page: Option<ActivePage>,
@@ -227,10 +231,40 @@ pub struct OpenDavApp {
 
 impl Default for OpenDavApp {
     fn default() -> Self {
+        let build_worksheet = |name: &str, config_type: &str| {
+            let mut tree = egui_tiles::Tree::empty(format!("{}_tree", name.to_lowercase()));
+            let pane = crate::config::workbook::Pane::TimeSeries { 
+                id: format!("ts_{}_{}", name.to_lowercase(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros()),
+                config: match config_type { "Driver" => crate::config::worksheet::WorksheetConfig::driver(crate::config::theme::AppTheme::for_mode(true)), "Vehicle" => crate::config::worksheet::WorksheetConfig::vehicle(crate::config::theme::AppTheme::for_mode(true)), "Tyre" => crate::config::worksheet::WorksheetConfig::tyre(crate::config::theme::AppTheme::for_mode(true)), "Shocks" => crate::config::worksheet::WorksheetConfig::shocks(crate::config::theme::AppTheme::for_mode(true)), _ => crate::config::worksheet::WorksheetConfig { lanes: vec![] } },
+            };
+            let tile_id = tree.tiles.insert_pane(pane);
+            tree.root = Some(tile_id);
+            crate::config::workbook::Worksheet {
+                name: name.to_string(),
+                tree,
+            }
+        };
+
+        let default_workbook = crate::config::workbook::Workbook {
+            name: "Default".to_string(),
+            worksheets: vec![
+                build_worksheet("Driver", "Driver"),
+                build_worksheet("Vehicle", "Vehicle"),
+                build_worksheet("Tyre", "Tyre"),
+                build_worksheet("Shocks", "Shocks"),
+            ],
+        };
+
         Self {
             app_state: AppState::Splash { progress: 0.0 },
             active_page: ActivePage::Graphs,
-            active_worksheet: WorksheetTab::Driver,
+            workbooks: vec![default_workbook],
+            active_workbook_idx: 0,
+            active_worksheet_idx: 0,
+            previous_worksheet_idx: None,
+            properties_window_open: None,
+            worksheet_clipboard: None,
+            pane_to_close: None,
             active_reports_tab: ReportsTab::SectorAnalysis,
             session_loaded: false,
             active_file: None,
@@ -249,7 +283,6 @@ impl Default for OpenDavApp {
             ref_lap_white: None,
             ref_lap_cyan: None,
             visible_x_range: None,
-            previous_worksheet: None,
             show_graphs_track_map: false,
             previous_page: None,
             previous_show_graphs_track_map: None,
@@ -336,10 +369,18 @@ impl OpenDavApp {
             .insert(0, "DIN1451".to_owned());
         _cc.egui_ctx.set_fonts(fonts);
 
-        let app = Self {
+        let mut app = Self {
             settings: crate::config::settings::AppSettings::load(),
             ..Self::default()
         };
+
+        if let Some(storage) = _cc.storage {
+            if let Some(json) = storage.get_string("opendav_workbooks") {
+                if let Ok(w) = serde_json::from_str(&json) {
+                    app.workbooks = w;
+                }
+            }
+        }
 
         let mut style = egui::Style::default();
         crate::config::theme::AppTheme::for_mode(app.settings.dark_mode).apply(&mut style);
@@ -930,6 +971,7 @@ impl LoadedSession {
             distance_delta_pts_cache: vec![],
             time_delta_pts_cache: vec![],
             worksheet_channel_pts_cache,
+            custom_channel_pts_cache: std::collections::HashMap::new(),
             gear_pts_cache: gear,
             lap_ranges: ranges,
             lap_markers: markers,
@@ -1106,10 +1148,16 @@ impl OpenDavApp {
                     lap_num: reference_lap,
                 },
             };
+            let custom_channels: Vec<String> = self.sessions[p_idx]
+                .custom_channel_pts_cache
+                .keys()
+                .cloned()
+                .collect();
             crate::signals::comparison::build_comparison_cache(
                 &self.sessions,
                 selection,
                 &crate::signals::comparison::COMPARISON_CHANNELS,
+                &custom_channels,
             )
             .ok()
         };
@@ -1126,6 +1174,12 @@ impl OpenDavApp {
 }
 
 impl eframe::App for OpenDavApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Ok(json) = serde_json::to_string(&self.workbooks) {
+            storage.set_string("opendav_workbooks", json);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_simgit_import();
         // --- GLOBAL DRAG & DROP SUPPORT ---
@@ -1490,14 +1544,8 @@ impl OpenDavApp {
         self.cursor_x = note.context.cursor_seconds;
         self.visible_x_range = note.context.time_range();
         self.active_simgit_note_id = Some(note.id.clone());
-        self.active_worksheet = match note.context.worksheet.as_str() {
-            "Vehicle" => WorksheetTab::Vehicle,
-            "Tyre" => WorksheetTab::Tyre,
-            "Shocks" => WorksheetTab::Shocks,
-            _ => WorksheetTab::Driver,
-        };
+        self.active_worksheet_idx = self.workbooks[self.active_workbook_idx].worksheets.iter().position(|w| w.name == note.context.worksheet).unwrap_or(0);
         self.restore_simgit_track_map_context(note.context.track_map.as_ref());
-        self.previous_worksheet = None;
         self.reset_bounds_flag = false;
         self.reset_bounds_next_frame = 0;
         self.active_sidebar_tab = Some(GraphsSidebarTab::Notes);
@@ -1634,7 +1682,6 @@ impl OpenDavApp {
         self.reset_bounds_next_frame = 3;
         self.reset_track_map_bounds_flag = true;
         self.reset_track_map_bounds_next_frame = 3;
-        self.active_page = ActivePage::Graphs;
         self.active_sidebar_tab = Some(GraphsSidebarTab::Details);
         Ok(())
     }

@@ -129,6 +129,7 @@ pub struct ComparisonCache {
     pub primary_timeline: Vec<f64>,
     pub primary_distances: Vec<f64>,
     pub channels: Vec<ComparisonChannel>,
+    pub custom_channels: std::collections::HashMap<String, Vec<[f64; 2]>>,
     pub sector_deltas: Vec<Option<f64>>,
 }
 
@@ -230,6 +231,7 @@ pub fn build_comparison_cache(
     sessions: &[LoadedSession],
     selection: ComparisonSelection,
     selectors: &[CacheSelector],
+    custom_channels_list: &[String],
 ) -> Result<ComparisonCache, ComparisonError> {
     let primary =
         sessions
@@ -310,6 +312,22 @@ pub fn build_comparison_cache(
         });
     }
 
+    let mut custom_channels = std::collections::HashMap::new();
+    for custom_name in custom_channels_list {
+        let source = dataframe_channel(reference, custom_name, 1.0);
+        let reference_values: Vec<f64> = reference_rows
+            .iter()
+            .map(|row| source.value(*row))
+            .collect();
+        if let Ok(aligned_values) = apply_weights(&reference_values, &weights) {
+            let mut raw_points = Vec::with_capacity(primary_timeline.len());
+            for (&time, &raw_value) in primary_timeline.iter().zip(&aligned_values) {
+                raw_points.push([time, raw_value]);
+            }
+            custom_channels.insert(custom_name.clone(), raw_points);
+        }
+    }
+
     let sector_deltas = calculate_sector_deltas(primary_lap, reference_lap, &primary.sectors);
 
     Ok(ComparisonCache {
@@ -318,6 +336,7 @@ pub fn build_comparison_cache(
         primary_timeline,
         primary_distances,
         channels,
+        custom_channels,
         sector_deltas,
     })
 }
@@ -774,8 +793,8 @@ fn sample_sorted_series(positions: &[f64], values: &[f64], target: f64) -> Optio
     Some(values[lower] + (values[upper] - values[lower]) * fraction)
 }
 
-fn sample_points(points: &[[f64; 2]], target: f64) -> Option<f64> {
-    if points.is_empty() || !target.is_finite() {
+pub fn sample_points(points: &[[f64; 2]], target: f64) -> Option<f64> {
+    if points.is_empty() || target < points[0][0] || target > points[points.len() - 1][0] {
         return None;
     }
     if target <= points[0][0] {

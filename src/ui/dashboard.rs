@@ -1327,7 +1327,7 @@ impl OpenDavApp {
                 ui.label(
                     egui::RichText::new(format!(
                         "{} | {} | {}",
-                        worksheet_label(self.active_worksheet),
+                        self.workbooks[self.active_workbook_idx].worksheets[self.active_worksheet_idx].name.clone(),
                         self.selected_lap
                             .map(|(_, lap)| format!("Lap {lap}"))
                             .unwrap_or_else(|| "No lap".to_owned()),
@@ -1450,7 +1450,7 @@ impl OpenDavApp {
                 cursor_seconds: self.cursor_x,
                 viewport: self.visible_x_range,
                 lap_number: self.selected_lap.map(|(_, lap)| lap),
-                worksheet: worksheet_label(self.active_worksheet).to_owned(),
+                worksheet: self.workbooks[self.active_workbook_idx].worksheets[self.active_worksheet_idx].name.clone(),
                 cyan_reference: capture_reference_context(&self.sessions, self.ref_lap_cyan),
                 secondary_reference: capture_reference_context(&self.sessions, self.ref_lap_white),
                 track_map: Some(crate::simgit::repository::TrackMapContext {
@@ -1846,26 +1846,6 @@ fn capture_reference_context(
         repository_record: session.repository_record.clone(),
         lap_number,
     })
-}
-
-fn worksheet_label(tab: crate::config::worksheet::WorksheetTab) -> &'static str {
-    use crate::config::worksheet::WorksheetTab;
-    match tab {
-        WorksheetTab::Driver => "Driver",
-        WorksheetTab::Vehicle => "Vehicle",
-        WorksheetTab::Tyre => "Tyre",
-        WorksheetTab::Shocks => "Shocks",
-        WorksheetTab::TireEnergy => "Tire Energy",
-        WorksheetTab::TireFuelWindows => "Tire & Fuel",
-        WorksheetTab::TireTempLoad => "Tire Temp/Load",
-        WorksheetTab::MathSandbox => "Math Sandbox",
-        WorksheetTab::EmpiricalAero => "Empirical Aero",
-        WorksheetTab::DownforceMapping => "Downforce Mapping",
-        WorksheetTab::PitchPlatform => "Pitch & Platform",
-        WorksheetTab::HandlingAnalyzer => "Handling Analyzer",
-        WorksheetTab::TlltdDistribution => "TLLTD Distribution",
-        WorksheetTab::CompressionRates => "Compression Rates",
-    }
 }
 
 fn format_note_context(note: &crate::simgit::repository::AnalysisNote) -> String {

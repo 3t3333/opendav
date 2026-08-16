@@ -7,19 +7,21 @@ use egui_plot::{
 };
 
 pub struct ChartTrace<'a> {
-    pub name: &'static str,
+    pub name: String,
+    pub raw_channel_name: String,
     pub cache: CacheSelector,
     pub scaled_pts: &'a [[f64; 2]],
     pub color: egui::Color32,
     pub width: f32,
+    pub custom_scaling: Option<(f64, f64)>,
     pub raw_val: f64,
     pub cyan_ref_val: Option<f64>,
     pub secondary_ref_val: Option<f64>,
-    pub unit: &'static str,
+    pub unit: String,
 }
 
 pub struct ChartLane<'a> {
-    pub title: &'static str,
+    pub title: String,
     pub y_min: f64,
     pub y_max: f64,
     pub traces: Vec<ChartTrace<'a>>,
@@ -28,22 +30,22 @@ pub struct ChartLane<'a> {
 fn display_value_and_unit(
     selector: CacheSelector,
     value: f64,
-    metric_unit: &'static str,
+    metric_unit: String,
     use_metric: bool,
-) -> (f64, &'static str) {
+) -> (f64, String) {
     if use_metric {
         return (value, metric_unit);
     }
     if selector.is_temperature() {
-        return (value * 1.8 + 32.0, " °F");
+        return (value * 1.8 + 32.0, " °F".to_string());
     }
     if selector.is_shock_deflection() {
-        return (value * 0.0393701, " in");
+        return (value * 0.0393701, " in".to_string());
     }
     match selector {
-        CacheSelector::Speed => (value * 0.621371, " mph"),
+        CacheSelector::Speed => (value * 0.621371, " mph".to_string()),
         CacheSelector::FrontHeight | CacheSelector::RearHeight | CacheSelector::Rake => {
-            (value * 0.0393701, " in")
+            (value * 0.0393701, " in".to_string())
         }
         _ => (value, metric_unit),
     }
@@ -237,6 +239,44 @@ impl OpenDavApp {
         if self.sessions.is_empty() {
             return;
         }
+
+        // Pre-compute custom channel caches
+        {
+            let p_idx = self.primary_session_idx;
+            let df = self.sessions[p_idx].session.dataframe.clone();
+            let timeline = self.sessions[p_idx].speed_pts_cache.iter().map(|p| p[0]).collect::<Vec<f64>>();
+            let rows = self.sessions[p_idx].cache_to_df_index.clone();
+            let custom_cache = &mut self.sessions[p_idx].custom_channel_pts_cache;
+            for lane_spec in &config.lanes {
+                for trace_spec in &lane_spec.traces {
+                    let raw_channel_name = trace_spec.custom_channel.clone().unwrap_or_else(|| trace_spec.cache.telemetry_source().map(|(n, _)| n.to_string()).unwrap_or_else(|| trace_spec.name.clone()));
+                    if !custom_cache.contains_key(&raw_channel_name) {
+                        if let Ok(col) = df.column(&raw_channel_name) {
+                            if let Ok(ca) = col.f64() {
+                                let mut min_val = f64::MAX;
+                                let mut max_val = f64::MIN;
+                                let pts: Vec<[f64; 2]> = timeline.iter().zip(rows.iter()).map(|(&t, &r)| {
+                                    let v = ca.get(r).unwrap_or(0.0);
+                                    if v < min_val { min_val = v; }
+                                    if v > max_val { max_val = v; }
+                                    [t, v]
+                                }).collect();
+                                if min_val > max_val {
+                                    min_val = 0.0;
+                                    max_val = 1.0;
+                                }
+                                if (max_val - min_val).abs() < f64::EPSILON {
+                                    min_val -= 1.0;
+                                    max_val += 1.0;
+                                }
+                                custom_cache.insert(raw_channel_name, (min_val, max_val, pts));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let loaded = &self.sessions[self.primary_session_idx];
         let simgit_note_zones = loaded
             .repository_record
@@ -282,29 +322,49 @@ impl OpenDavApp {
         for lane_spec in &config.lanes {
             let mut traces = Vec::new();
             for trace_spec in &lane_spec.traces {
-                let raw_val = if has_cursor {
-                    self.get_raw_value(self.primary_session_idx, trace_spec.cache, df_idx)
+                let mut raw_val = if has_cursor {
+                    if let Some(custom_name) = &trace_spec.custom_channel {
+                        self.sessions[self.primary_session_idx]
+                            .session
+                            .dataframe
+                            .column(custom_name)
+                            .ok()
+                            .and_then(|c| c.f64().ok())
+                            .map(|c| c.get(df_idx).unwrap_or(0.0))
+                            .unwrap_or(0.0)
+                    } else {
+                        self.get_raw_value(self.primary_session_idx, trace_spec.cache, df_idx)
+                    }
                 } else {
                     0.0
                 };
-                let (raw_val, unit) = display_value_and_unit(
+                let (formatted_raw_val, unit) = display_value_and_unit(
                     trace_spec.cache,
                     raw_val,
-                    trace_spec.unit,
+                    trace_spec.unit.clone(),
                     self.settings.use_metric,
                 );
+                // Re-assign raw_val to the scaled value
+                raw_val = formatted_raw_val;
+
                 let reference_value =
                     |cache: Option<&crate::signals::comparison::ComparisonCache>| {
-                        let value = cache
-                            .and_then(|cache| cache.channel(trace_spec.cache))
-                            .and_then(|channel| {
-                                self.cursor_x.and_then(|cx| channel.raw_value_at(cx))
-                            })?;
+                        let value = if let Some(custom_name) = &trace_spec.custom_channel {
+                            cache
+                                .and_then(|c| c.custom_channels.get(custom_name))
+                                .and_then(|pts| crate::signals::comparison::sample_points(pts, self.cursor_x?))
+                        } else {
+                            cache
+                                .and_then(|cache| cache.channel(trace_spec.cache))
+                                .and_then(|channel| {
+                                    self.cursor_x.and_then(|cx| channel.raw_value_at(cx))
+                                })
+                        }?;
                         Some(
                             display_value_and_unit(
                                 trace_spec.cache,
                                 value,
-                                trace_spec.unit,
+                                trace_spec.unit.clone(),
                                 self.settings.use_metric,
                             )
                             .0,
@@ -313,21 +373,28 @@ impl OpenDavApp {
                 let cyan_ref_val = reference_value(self.comparison_cyan.as_ref());
                 let secondary_ref_val = reference_value(self.comparison_secondary.as_ref());
 
-                let scaled_pts = self.get_cache_slice(trace_spec.cache);
+                let raw_channel_name = trace_spec.custom_channel.clone().unwrap_or_else(|| trace_spec.cache.telemetry_source().map(|(n, _)| n.to_string()).unwrap_or_else(|| trace_spec.name.clone()));
+                let (scaled_pts, custom_scaling) = if let Some((min, max, pts)) = self.sessions[self.primary_session_idx].custom_channel_pts_cache.get(&raw_channel_name) {
+                    (pts.as_slice(), Some((*min, *max)))
+                } else {
+                    (self.get_cache_slice(trace_spec.cache), None)
+                };
                 traces.push(ChartTrace {
-                    name: trace_spec.name,
+                    name: trace_spec.name.clone(),
+                    raw_channel_name,
                     cache: trace_spec.cache,
                     scaled_pts,
                     color: trace_spec.color,
                     width: trace_spec.width,
+                    custom_scaling,
                     raw_val,
                     cyan_ref_val,
                     secondary_ref_val,
-                    unit,
+                    unit: unit.to_string(),
                 });
             }
             lanes.push(ChartLane {
-                title: lane_spec.title,
+                title: lane_spec.title.clone(),
                 y_min: lane_spec.y_min,
                 y_max: lane_spec.y_max,
                 traces,
@@ -820,7 +887,7 @@ impl OpenDavApp {
             for lane in &lanes {
                 for trace in &lane.traces {
                     // Automatically draw smoothed variant behind raw data for Ride Heights and Rake
-                    let smooth_cache_name = match trace.name {
+                    let smooth_cache_name = match trace.name.as_str() {
                         "Front Height" | "Front RH" | "CFSRH" => Some("Ride Height (F) Smooth"),
                         "Rear Height" | "Rear RH" => Some("Ride Height (R) Smooth"),
                         "Dynamic Rake" => Some("Rake Angle Smooth"),
@@ -854,9 +921,19 @@ impl OpenDavApp {
                         }
                     }
 
-                    let dec_pts = decimate_points(trace.scaled_pts);
+                    let mut dec_pts = decimate_points(trace.scaled_pts);
+                    if let Some((c_min, c_max)) = trace.custom_scaling {
+                        // Dynamically scale decimated points to fit the lane
+                        let span = c_max - c_min;
+                        let padding = span * 0.05;
+                        let scaled_vec: Vec<[f64; 2]> = dec_pts.points().iter().map(|p| {
+                            let fraction = ((p.y - (c_min - padding)) / (span + padding * 2.0)).clamp(0.0, 1.0);
+                            [p.x, lane.y_min + fraction * (lane.y_max - lane.y_min)]
+                        }).collect();
+                        dec_pts = scaled_vec.into();
+                    }
                     plot_ui.line(
-                        Line::new(trace.name, dec_pts)
+                        Line::new(trace.name.clone(), dec_pts)
                             .color(trace.color)
                             .width(trace.width),
                     );
@@ -867,7 +944,26 @@ impl OpenDavApp {
             if let Some(cache) = self.comparison_cyan.as_ref() {
                 for lane in &lanes {
                     for trace in &lane.traces {
-                        if let Some(channel) = cache.channel(trace.cache) {
+                        if trace.custom_scaling.is_some() {
+                            let custom_name = &trace.raw_channel_name;
+                            if let Some(raw_pts) = cache.custom_channels.get(custom_name) {
+                                let mut dec_pts = decimate_points(raw_pts);
+                                if let Some((c_min, c_max)) = trace.custom_scaling {
+                                    let span = c_max - c_min;
+                                    let padding = span * 0.05;
+                                    let scaled_vec: Vec<[f64; 2]> = dec_pts.points().iter().map(|p| {
+                                        let fraction = ((p.y - (c_min - padding)) / (span + padding * 2.0)).clamp(0.0, 1.0);
+                                        [p.x, lane.y_min + fraction * (lane.y_max - lane.y_min)]
+                                    }).collect();
+                                    dec_pts = scaled_vec.into();
+                                }
+                                plot_ui.line(
+                                    Line::new("", dec_pts)
+                                        .color(theme.reference_primary)
+                                        .width(1.5),
+                                );
+                            }
+                        } else if let Some(channel) = cache.channel(trace.cache) {
                             let points = decimate_points(&channel.scaled_points);
                             plot_ui.line(
                                 Line::new("", points)
@@ -882,7 +978,26 @@ impl OpenDavApp {
             if let Some(cache) = self.comparison_secondary.as_ref() {
                 for lane in &lanes {
                     for trace in &lane.traces {
-                        if let Some(channel) = cache.channel(trace.cache) {
+                        if trace.custom_scaling.is_some() {
+                            let custom_name = &trace.raw_channel_name;
+                            if let Some(raw_pts) = cache.custom_channels.get(custom_name) {
+                                let mut dec_pts = decimate_points(raw_pts);
+                                if let Some((c_min, c_max)) = trace.custom_scaling {
+                                    let span = c_max - c_min;
+                                    let padding = span * 0.05;
+                                    let scaled_vec: Vec<[f64; 2]> = dec_pts.points().iter().map(|p| {
+                                        let fraction = ((p.y - (c_min - padding)) / (span + padding * 2.0)).clamp(0.0, 1.0);
+                                        [p.x, lane.y_min + fraction * (lane.y_max - lane.y_min)]
+                                    }).collect();
+                                    dec_pts = scaled_vec.into();
+                                }
+                                plot_ui.line(
+                                    Line::new("", dec_pts)
+                                        .color(theme.reference_secondary)
+                                        .width(1.5),
+                                );
+                            }
+                        } else if let Some(channel) = cache.channel(trace.cache) {
                             let points = decimate_points(&channel.scaled_points);
                             plot_ui.line(
                                 Line::new("", points)
@@ -1076,7 +1191,7 @@ impl OpenDavApp {
                                             };
 
                                             let val_fmt = if trace.name == "Gear" { format!("{:.0}", trace.raw_val) } else { format!("{:.1}", trace.raw_val) };
-                                            ui.label(egui::RichText::new(format!("{} [{}]", trace.name, trace.unit)).color(egui::Color32::WHITE).size(8.5));
+                                            ui.label(egui::RichText::new(format!("{} [{}]", trace.raw_channel_name, trace.unit)).color(egui::Color32::WHITE).size(8.5));
                                             ui.add_space(2.0);
                                             draw_badge(ui, "0", trace.color);
                                             ui.label(egui::RichText::new(val_fmt).color(trace.color).size(8.5));
@@ -1133,6 +1248,17 @@ impl OpenDavApp {
                     );
                 }
             }
+        })
+        .response
+        .context_menu(|ui| {
+            if ui.button("Properties").clicked() {
+                self.properties_window_open = Some(plot_id.to_string());
+                ui.close_menu();
+            }
+            if ui.button("Cut").clicked() {
+                self.pane_to_close = Some(plot_id.to_string());
+                ui.close_menu();
+            }
         });
 
         // 5. RESTORE COPIES BACK TO APP STATE IN CONSTANT TIME
@@ -1171,7 +1297,7 @@ mod unit_tests {
             display_value_and_unit(CacheSelector::LfTempCenter, 100.0, " °C", false);
 
         assert!((fahrenheit - 212.0).abs() < 1e-9);
-        assert_eq!(unit, " °F");
+        assert_eq!(unit: unit.to_string(), " °F");
     }
 
     #[test]
@@ -1180,7 +1306,7 @@ mod unit_tests {
             display_value_and_unit(CacheSelector::LfShockDeflection, 25.4, " mm", false);
 
         assert!((inches - 1.0).abs() < 1e-5);
-        assert_eq!(unit, " in");
+        assert_eq!(unit: unit.to_string(), " in");
     }
 
     #[test]
